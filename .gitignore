@@ -1,0 +1,16 @@
+# hd-scraper
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Base de datos y crudos (no se versionan)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/raw/
+.env
+.env.local

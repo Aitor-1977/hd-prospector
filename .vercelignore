@@ -1,0 +1,11 @@
+# Excluir de los despliegues de Vercel lo que no sirve al runtime de la API.
+.venv/
+venv/
+tests/
+data/
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+.pytest_cache/
+CLAUDE.md
