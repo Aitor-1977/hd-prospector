@@ -41,9 +41,29 @@ def _row_a_evidencia(row) -> dict:
     }
 
 
+@app.get("/")
+def raiz() -> dict:
+    """Banner de bienvenida y mapa de endpoints (la raíz no sirve evidencia)."""
+    return {
+        "service": "hd-prospector",
+        "role": "evidence-extraction",
+        "descripcion": "Extrae, normaliza y almacena señales públicas. No interpreta.",
+        "estado": "vivo",
+        "endpoints": {
+            "GET /health": "estado del servicio",
+            "GET /evidencias": "evidencia consumible (filtros: empresa, tipo_evento, desde, hasta)",
+            "GET /evidencias/{id}": "una evidencia por id",
+            "GET /salud-fuentes": "salud por fuente/conector",
+            "GET /stats": "contadores agregados",
+            "GET /docs": "documentación interactiva (OpenAPI)",
+        },
+        "nota": "API de solo lectura. La extracción corre en un host aparte (ver README).",
+    }
+
+
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "hd-scraper", "role": "evidence-extraction"}
+    return {"status": "ok", "service": "hd-prospector", "role": "evidence-extraction"}
 
 
 @app.get("/evidencias")
