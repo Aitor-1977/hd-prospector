@@ -20,6 +20,7 @@ from .connectors.base import Connector
 from .db.database import Database
 from .db.models import ESTADO_NO_FECHADO, EvidenceRecord, QuerySpec, ahora_iso
 from .governance.health import registrar_corrida
+from .signals import calcular_confianza, detectar_keywords
 from .storage.raw_store import guardar_crudo
 
 log = logging.getLogger("hd_scraper.pipeline")
@@ -54,8 +55,8 @@ def _escribir_evidencia(db: Database, record: EvidenceRecord) -> bool:
             cita_textual, fecha_extraccion, url_fuente, nombre_medio,
             empresa_mencionada, tipo_evento, origen_declaracion, hash_dedup,
             fecha_publicacion, persona_citada, cargo,
-            connector, estado, raw_hash, categoria, creado_en
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            connector, estado, raw_hash, categoria, keywords, confianza, creado_en
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (hash_dedup) DO NOTHING
         """,
         (
@@ -63,7 +64,9 @@ def _escribir_evidencia(db: Database, record: EvidenceRecord) -> bool:
             record.nombre_medio, record.empresa_mencionada, record.tipo_evento,
             record.origen_declaracion, record.hash_dedup, record.fecha_publicacion,
             record.persona_citada, record.cargo, record.connector, record.estado,
-            record.raw_hash, record.categoria, record.creado_en,
+            record.raw_hash, record.categoria,
+            json.dumps(record.keywords, ensure_ascii=False), record.confianza,
+            record.creado_en,
         ),
     )
     return cur.rowcount > 0
@@ -104,6 +107,10 @@ def run_connector(db: Database, connector: Connector, query: QuerySpec) -> RunRe
         try:
             record = connector.normalize(raw)
             record.categoria = query.categoria  # etiqueta de ecosistema (descubrimiento por categoría)
+            # Extracción objetiva Nivel 1 (Motor A): señales genéricas + confianza.
+            record.keywords = detectar_keywords(record.cita_textual)
+            record.confianza = calcular_confianza(
+                record.fecha_publicacion, record.nombre_medio, record.keywords)
             veredicto = connector.validate(record)
 
             if not veredicto.ok:

@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS evidencias (
     estado              TEXT NOT NULL DEFAULT 'ok',
     raw_hash            TEXT,
     categoria           TEXT,
+    keywords            TEXT,
+    confianza           DOUBLE PRECISION NOT NULL DEFAULT 0,
     creado_en           TEXT NOT NULL
 );
 
@@ -32,6 +34,8 @@ CREATE INDEX IF NOT EXISTS idx_evidencias_fpub    ON evidencias (fecha_publicaci
 -- Migración idempotente: añade columnas nuevas a una `evidencias` ya existente
 -- (Postgres soporta ADD COLUMN IF NOT EXISTS; en una base nueva es no-op).
 ALTER TABLE evidencias ADD COLUMN IF NOT EXISTS categoria TEXT;
+ALTER TABLE evidencias ADD COLUMN IF NOT EXISTS keywords  TEXT;
+ALTER TABLE evidencias ADD COLUMN IF NOT EXISTS confianza DOUBLE PRECISION NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_evidencias_categoria ON evidencias (categoria);
 

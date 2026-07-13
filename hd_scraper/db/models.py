@@ -152,6 +152,10 @@ class EvidenceRecord:
     persona_citada: Optional[str] = None
     cargo: Optional[str] = None
 
+    # --- Extracción objetiva Nivel 1 (Motor A) ---
+    keywords: list = field(default_factory=list)   # etiquetas de señal genéricas
+    confianza: float = 0.0                          # calidad objetiva de la extracción 0–1
+
     # --- Metadatos internos (no forman parte del contrato público) ---
     connector: str = ""
     estado: str = ESTADO_OK

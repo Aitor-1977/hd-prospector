@@ -1,10 +1,33 @@
-# hd-prospector
+# hd-prospector · Motor A
 
 Motor de **extracción de evidencia**: aplicación Python independiente que
 extrae, normaliza y almacena señales públicas sobre empresas. **No puntúa, no
-clasifica, no interpreta** — eso lo hace un sistema consumidor aparte (Radar).
+clasifica culturalmente, no interpreta.**
 
 > Proyecto autónomo. No depende de ningún otro repositorio.
+
+## Frontera Motor A / Motor B (arquitectura)
+
+Este repo es el **Motor A (objetivo)**: scraping, limpieza, extracción,
+deduplicación y señales Nivel 1 (genéricas). Produce un **corpus de evidencia
+verificable** — nada más:
+
+```
+Fuentes (RSS, Google News, GDELT, job boards, sitios)
+      │  todo el fetching ocurre en el backend (Vercel)
+      ▼
+Motor A  (este repo, hd-prospector)  →  Neon PostgreSQL
+      │  GET /corpus  (empresa · fuente · fecha · texto · keywords · confianza)
+      ▼
+Motor B  (RadarHD, repo aparte)      →  Deuda Cultural™, ICP, hipótesis, relato
+```
+
+**Regla dura:** la Deuda Cultural™, el ICP y las hipótesis condicionales son
+propiedad intelectual de HD y viven en el **Motor B (RadarHD)**, NUNCA en este
+repo. Aquí las señales son una taxonomía **genérica y pública** (ronda, despidos,
+churn/retención, expansión, cambio de liderazgo, lanzamiento, adquisición). Si
+cambia la metodología HD, se toca solo el Motor B; este scraper no se modifica.
+El contrato de consumo es el endpoint estable `GET /corpus` (`motor_a.corpus.v1`).
 
 ## Estado (Fase 1 — COMPLETA)
 

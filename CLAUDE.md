@@ -7,8 +7,22 @@ Guía para agentes (y humanos) que trabajen en este proyecto.
 hd-scraper es la **capa de extracción de evidencia** de Hamaca Digital.
 Extrae, normaliza y almacena señales públicas sobre empresas.
 
-**NUNCA puntúa, clasifica ni interpreta.** Eso lo hace **Radar**, otro sistema
-que consume esta base como fuente de verdad. Si una tarea te pide "decidir si
+**NUNCA puntúa, clasifica culturalmente ni interpreta.** Eso lo hace **Radar**,
+otro sistema que consume esta base como fuente de verdad.
+
+## Frontera Motor A / Motor B (INVIOLABLE)
+
+Este repo es **Motor A (objetivo)**: scraping, limpieza, extracción, dedup y
+señales Nivel 1 con taxonomía **genérica/pública** (ronda, despidos, churn,
+expansión, liderazgo, lanzamiento, adquisición). Emite el corpus por `GET
+/corpus` (contrato `motor_a.corpus.v1`: empresa·fuente·fecha·texto·keywords·
+confianza).
+
+La **Deuda Cultural™ (Moral/Temporal/Relacional/Ontológica/Epistémica)**, el
+**score ICP** y las **hipótesis condicionales** son IP de HD y viven en el
+**Motor B (repo RadarHD)** — JAMÁS en este repo. Si alguien pide "clasificar la
+Deuda Cultural" aquí, está fuera de alcance: pertenece a RadarHD. La `confianza`
+mide calidad de extracción, no juicio del contenido. Si una tarea te pide "decidir si
 esto es bueno/malo", "puntuar", "resumir con criterio" o "inferir el tipo de
 evento leyendo el texto", está fuera de alcance: no pertenece a hd-scraper.
 

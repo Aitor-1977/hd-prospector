@@ -112,7 +112,8 @@ def enriquecer(nombre: str, http_get: Callable[[str], str]) -> dict:
         "nombre": nombre,
         "sitio_web": None,
         "discurso": "",
-        "vertical_sugerida": None,
+        "vertical_sugerida": None,   # sugerencia objetiva (keyword), NO dato duro
+        "vertical_confianza": 0.0,
         "linkedin": linkedin_search_url(nombre),
         "google": google_search_url(nombre),
         "fuentes": [],
@@ -127,7 +128,9 @@ def enriquecer(nombre: str, http_get: Callable[[str], str]) -> dict:
             try:
                 html = http_get(sitio)
                 resultado["discurso"] = extraer_discurso(html)
-                resultado["vertical_sugerida"] = sugerir_vertical(resultado["discurso"])
+                sug = sugerir_vertical(resultado["discurso"])
+                resultado["vertical_sugerida"] = sug
+                resultado["vertical_confianza"] = 0.5 if sug else 0.0  # keyword-based: baja
                 resultado["fuentes"].append(sitio)
             except Exception as exc:
                 resultado["notas"].append(f"no se pudo leer el sitio: {exc}")

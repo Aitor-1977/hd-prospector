@@ -86,6 +86,13 @@ def _alta(payload: ProspectoIn) -> dict:
     return upsert_prospecto(get_db(), record)
 
 
+def _keywords(row) -> list:
+    try:
+        return json.loads(row["keywords"]) if row["keywords"] else []
+    except (ValueError, TypeError):
+        return []
+
+
 def _row_a_evidencia(row) -> dict:
     return {
         "id": row["id"],
@@ -100,6 +107,8 @@ def _row_a_evidencia(row) -> dict:
         "tipo_evento": row["tipo_evento"],
         "origen_declaracion": row["origen_declaracion"],
         "categoria": row["categoria"],
+        "keywords": _keywords(row),
+        "confianza": row["confianza"],
         "hash_dedup": row["hash_dedup"],
     }
 
@@ -117,6 +126,7 @@ def raiz() -> dict:
             "GET /health": "estado del servicio",
             "GET /evidencias": "evidencia consumible (filtros: empresa, tipo_evento, desde, hasta)",
             "GET /evidencias/{id}": "una evidencia por id",
+            "GET /corpus": "corpus estable Motor A→B (empresa·fuente·fecha·texto·keywords·confianza)",
             "GET /prospectos": "prospectos por ecosistema (filtros: categoria, q, con_discurso)",
             "GET /prospectos/categorias": "conteo de prospectos por ecosistema",
             "GET /prospectos/{id}": "un prospecto por id (incluye Thick Data)",
@@ -206,6 +216,70 @@ def obtener_evidencia(evidencia_id: int) -> dict:
     if row is None:
         raise HTTPException(404, "evidencia no encontrada o no consumible")
     return _row_a_evidencia(row)
+
+
+def _row_a_corpus(row) -> dict:
+    """Contrato estable del corpus (Motor A → Motor B / RadarHD). Solo hechos."""
+    return {
+        "empresa": row["empresa_mencionada"],
+        "fuente": row["nombre_medio"],
+        "fecha": row["fecha_publicacion"],
+        "texto": row["cita_textual"],
+        "url": row["url_fuente"],
+        "keywords": _keywords(row),
+        "confianza": row["confianza"],
+        "categoria": row["categoria"],
+        "tipo_evento": row["tipo_evento"],
+        "hash": row["hash_dedup"],
+    }
+
+
+@app.get("/corpus")
+def corpus(
+    empresa: Optional[str] = Query(None),
+    categoria: Optional[str] = Query(None, description="Ecosistema (VC|Startup|Incubadora|Corporativo)"),
+    tipo_evento: Optional[str] = Query(None),
+    min_confianza: float = Query(0.0, ge=0.0, le=1.0, description="Confianza mínima"),
+    desde: Optional[str] = Query(None, description="fecha >= (ISO 8601)"),
+    hasta: Optional[str] = Query(None, description="fecha <= (ISO 8601)"),
+    limite: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+) -> dict:
+    """Corpus de evidencia verificable (Motor A). Contrato estable para RadarHD.
+
+    Solo hechos observables: empresa, fuente, fecha, texto, url, keywords
+    (señales Nivel 1 objetivas) y confianza. NO incluye Deuda Cultural™, ICP ni
+    hipótesis: eso lo aplica el Motor B (RadarHD) al consumir este corpus.
+    """
+    if categoria is not None and categoria not in CATEGORIAS:
+        raise HTTPException(400, f"categoria inválida: {categoria}")
+    if tipo_evento is not None and tipo_evento not in TIPOS_EVENTO:
+        raise HTTPException(400, f"tipo_evento inválido: {tipo_evento}")
+
+    where = ["estado = ?", "confianza >= ?"]
+    params: list = [ESTADO_OK, min_confianza]
+    for col, val in (("empresa_mencionada", empresa), ("categoria", categoria),
+                     ("tipo_evento", tipo_evento)):
+        if val:
+            where.append(f"{col} = ?")
+            params.append(val)
+    if desde:
+        where.append("fecha_publicacion >= ?")
+        params.append(desde)
+    if hasta:
+        where.append("fecha_publicacion <= ?")
+        params.append(hasta)
+
+    clausula = " AND ".join(where)
+    db = get_db()
+    total = db.fetch_one(f"SELECT COUNT(*) AS n FROM evidencias WHERE {clausula}", params)["n"]
+    filas = db.fetch_all(
+        f"SELECT * FROM evidencias WHERE {clausula} "
+        f"ORDER BY confianza DESC, fecha_publicacion DESC, id DESC LIMIT ? OFFSET ?",
+        params + [limite, offset],
+    )
+    return {"contrato": "motor_a.corpus.v1", "total": total, "limite": limite,
+            "offset": offset, "items": [_row_a_corpus(f) for f in filas]}
 
 
 @app.get("/salud-fuentes")
@@ -832,8 +906,9 @@ _ADMIN_HTML = """<!doctype html>
       if (d.linkedin) $("linkedin").value = d.linkedin;
       if (d.vertical_sugerida && !$("vertical").value.trim()) $("vertical").value = d.vertical_sugerida;
       if (d.discurso && !$("discurso").value.trim()) { $("discurso").value = d.discurso; $("fuente_discurso").value = "sitio_oficial"; }
+      const vsug = d.vertical_sugerida ? ` · vertical sugerida: ${d.vertical_sugerida} (confírmala)` : "";
       m.className = "msg ok";
-      m.textContent = d.sitio_web ? `✓ Web y discurso cargados${(d.notas||[]).length? " ("+d.notas.join("; ")+")":""}.` : `Sin web clara. Usa los enlaces. ${(d.notas||[]).join("; ")}`;
+      m.textContent = (d.sitio_web ? `✓ Web y discurso cargados${(d.notas||[]).length? " ("+d.notas.join("; ")+")":""}.` : `Sin web clara. Usa los enlaces. ${(d.notas||[]).join("; ")}`) + vsug;
       $("e_links").innerHTML =
         `<a href="${esc(safeUrl(d.linkedin))}" target="_blank" rel="noopener">LinkedIn ↗</a> · ` +
         `<a href="${esc(safeUrl(d.google))}" target="_blank" rel="noopener">Google ↗</a>` +

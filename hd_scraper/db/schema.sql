@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS evidencias (
     estado              TEXT NOT NULL DEFAULT 'ok',  -- ok | no_fechado
     raw_hash            TEXT,                   -- enlace al crudo retenido (raw_store)
     categoria           TEXT,                   -- ecosistema si viene de descubrimiento por categoría
+    keywords            TEXT,                   -- JSON: etiquetas de señal Nivel 1 (objetivas)
+    confianza           REAL NOT NULL DEFAULT 0, -- calidad objetiva de la extracción 0–1
     creado_en           TEXT NOT NULL
 );
 
