@@ -18,8 +18,10 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from ..config import settings
+from ..connectors import REGISTRY
 from ..db.database import get_db
-from ..db.models import CATEGORIAS, ESTADO_OK, TIPOS_EVENTO
+from ..db.models import CATEGORIAS, ESTADO_OK, TIPOS_EVENTO, QuerySpec
+from ..pipeline import run_connector
 from ..prospectos import nuevo_prospecto, upsert_prospecto
 from ..validation.validator import validate_prospecto
 
@@ -104,7 +106,8 @@ def raiz() -> dict:
             "GET /prospectos/categorias": "conteo de prospectos por ecosistema",
             "GET /prospectos/{id}": "un prospecto por id (incluye Thick Data)",
             "POST /prospectos": "alta de prospecto (requiere X-Ingest-Token)",
-            "GET /admin": "formulario web de alta de prospectos",
+            "POST /scrape": "rastreo bajo demanda de una empresa (requiere X-Ingest-Token)",
+            "GET /admin": "panel web: buscar señales, revisar y dar de alta prospectos",
             "GET /salud-fuentes": "salud por fuente/conector",
             "GET /stats": "contadores agregados",
             "GET /docs": "documentación interactiva (OpenAPI)",
@@ -281,126 +284,234 @@ def crear_prospectos_bulk(payloads: list[ProspectoIn] = Body(...),
     return {"total": len(payloads), "resultados": resultados}
 
 
+# --- Scraping bajo demanda (descubrimiento manual) -----------------------
+
+# Conectores rápidos aptos para correr dentro de una función serverless (una
+# petición HTTP por conector). Se excluyen los que consultan muchas fuentes
+# (rss_fijos) o requieren slug (job_boards) para no agotar el tiempo de la función.
+CONECTORES_SCRAPE = ("google_news", "gdelt")
+
+
+class ScrapeIn(BaseModel):
+    empresa: str
+    tipo_evento: str = "ronda"
+    connectors: list[str] = list(CONECTORES_SCRAPE)
+
+
+@app.post("/scrape")
+def scrape(payload: ScrapeIn, x_ingest_token: Optional[str] = Header(None)) -> dict:
+    """Rastrea señales de una empresa AL MOMENTO y las guarda (evidencia).
+
+    Descubrimiento manual: el operador escribe una empresa; el motor corre los
+    conectores rápidos y escribe la evidencia. Pensado para disparar desde /admin.
+    """
+    _exigir_token(x_ingest_token)
+    if payload.tipo_evento not in TIPOS_EVENTO:
+        raise HTTPException(400, f"tipo_evento inválido: {payload.tipo_evento}")
+    if not payload.empresa.strip():
+        raise HTTPException(400, "empresa vacía")
+
+    db = get_db()
+    resultados = []
+    for cname in payload.connectors:
+        cls = REGISTRY.get(cname)
+        if cls is None or cls.requires_slug or cname not in CONECTORES_SCRAPE:
+            resultados.append({"connector": cname, "error": "no disponible para scraping bajo demanda"})
+            continue
+        query = QuerySpec(empresa=payload.empresa.strip(), tipo_evento=payload.tipo_evento)
+        with cls() as conn:
+            res = run_connector(db, conn, query)
+        resultados.append({
+            "connector": cname, "vistos": res.vistos, "escritos": res.escritos,
+            "no_fechados": res.no_fechados, "duplicados": res.duplicados,
+            "rechazados": res.rechazados, "errores": len(res.errores),
+        })
+    total = sum(r.get("escritos", 0) for r in resultados)
+    return {"empresa": payload.empresa.strip(), "tipo_evento": payload.tipo_evento,
+            "total_escritos": total, "resultados": resultados}
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_form() -> str:
-    """Pantalla de alta de prospectos (formulario web, sin dependencias externas)."""
+    """Pantalla de descubrimiento (scraping) y alta de prospectos."""
     return _ADMIN_HTML
 
 
 _ADMIN_HTML = """<!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>hd-prospector · Alta de prospectos</title>
+<title>hd-prospector · Radar</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body { font-family: system-ui, -apple-system, sans-serif; margin: 0;
-         padding: 1.2rem; max-width: 640px; margin-inline: auto; line-height: 1.4; }
+         padding: 1.2rem; max-width: 680px; margin-inline: auto; line-height: 1.4; }
   h1 { font-size: 1.3rem; margin: 0 0 .2rem; }
-  p.sub { margin: 0 0 1.2rem; opacity: .7; font-size: .9rem; }
-  label { display: block; font-weight: 600; margin: .8rem 0 .25rem; font-size: .9rem; }
+  h2 { font-size: 1.05rem; margin: 1.6rem 0 .4rem; }
+  p.sub { margin: 0 0 1rem; opacity: .7; font-size: .9rem; }
+  section { border: 1px solid rgba(128,128,128,.25); border-radius: .7rem;
+    padding: .9rem 1rem 1.1rem; margin-top: 1.1rem; }
+  label { display: block; font-weight: 600; margin: .7rem 0 .25rem; font-size: .9rem; }
   input, select, textarea { width: 100%; padding: .6rem .7rem; border-radius: .5rem;
     border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit;
     font-size: 1rem; font-family: inherit; }
-  textarea { min-height: 110px; resize: vertical; }
+  textarea { min-height: 100px; resize: vertical; }
   .req::after { content: " *"; color: #e11; }
-  button { margin-top: 1.1rem; width: 100%; padding: .8rem; border: 0; border-radius: .5rem;
+  button { margin-top: 1rem; width: 100%; padding: .8rem; border: 0; border-radius: .5rem;
     background: #2563eb; color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }
+  button.sec { background: transparent; color: inherit; border: 1px solid rgba(128,128,128,.5);
+    margin-top: .5rem; padding: .5rem; font-weight: 500; font-size: .85rem; }
   button:disabled { opacity: .5; }
-  #msg { margin-top: 1rem; padding: .8rem; border-radius: .5rem; display: none; font-size: .9rem; }
-  #msg.ok { background: rgba(22,163,74,.15); border: 1px solid rgba(22,163,74,.5); display: block; }
-  #msg.err { background: rgba(220,38,38,.15); border: 1px solid rgba(220,38,38,.5); display: block; }
-  .counts { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0; }
-  .chip { padding: .3rem .6rem; border-radius: 1rem; border: 1px solid rgba(128,128,128,.4);
-    font-size: .85rem; }
+  .msg { margin-top: .8rem; padding: .7rem; border-radius: .5rem; display: none; font-size: .9rem; }
+  .msg.ok { background: rgba(22,163,74,.15); border: 1px solid rgba(22,163,74,.5); display: block; }
+  .msg.err { background: rgba(220,38,38,.15); border: 1px solid rgba(220,38,38,.5); display: block; }
+  .counts { display: flex; gap: .5rem; flex-wrap: wrap; margin: .6rem 0 0; }
+  .chip { padding: .3rem .6rem; border-radius: 1rem; border: 1px solid rgba(128,128,128,.4); font-size: .85rem; }
   .hint { font-size: .8rem; opacity: .65; margin-top: .2rem; }
+  .card { border: 1px solid rgba(128,128,128,.25); border-radius: .5rem; padding: .6rem .7rem; margin-top: .6rem; }
+  .card .meta { font-size: .78rem; opacity: .7; margin-top: .25rem; }
+  .card a { color: #3b82f6; text-decoration: none; }
+  .row { display: flex; gap: .5rem; }
+  .row > * { flex: 1; }
 </style></head><body>
-<h1>hd-prospector · Alta de prospectos</h1>
-<p class="sub">Registra entidades de los cuatro ecosistemas con su discurso corporativo (Thick Data). No interpreta: solo almacena.</p>
+<h1>hd-prospector · Radar</h1>
+<p class="sub">① Rastrea señales de una empresa → ② revísalas → ③ guárdala como prospecto con su discurso. El motor extrae y almacena; no interpreta.</p>
 
+<label class="req">Token de acceso</label>
+<input id="token" type="password" placeholder="HD_INGEST_TOKEN" autocomplete="off">
+<div class="hint">Se guarda solo en este dispositivo. Es el valor que pusiste en Vercel.</div>
 <div class="counts" id="counts"></div>
 
-<label class="req">Token de ingesta</label>
-<input id="token" type="password" placeholder="HD_INGEST_TOKEN" autocomplete="off">
-<div class="hint">Se guarda solo en este dispositivo (localStorage). Es el valor que pusiste en Vercel.</div>
+<section>
+  <h2>① Buscar señales (scraping)</h2>
+  <label class="req">Empresa</label>
+  <input id="s_empresa" placeholder="p. ej. Nubank">
+  <div class="row">
+    <div>
+      <label>Tipo de señal</label>
+      <select id="s_tipo">
+        <option value="ronda">ronda</option>
+        <option value="contratacion">contratación</option>
+        <option value="despido">despido</option>
+        <option value="lanzamiento">lanzamiento</option>
+        <option value="queja">queja</option>
+        <option value="cambio_sitio">cambio_sitio</option>
+      </select>
+    </div>
+    <div>
+      <label>Fuentes</label>
+      <select id="s_fuentes">
+        <option value="google_news,gdelt">Google News + GDELT</option>
+        <option value="google_news">Google News</option>
+        <option value="gdelt">GDELT</option>
+      </select>
+    </div>
+  </div>
+  <button id="s_btn">🔎 Buscar señales</button>
+  <div class="msg" id="s_msg"></div>
+</section>
 
-<label class="req">Nombre</label>
-<input id="nombre" placeholder="p. ej. Kaszek">
+<section>
+  <h2>② Señales encontradas</h2>
+  <div class="hint">Se llena tras buscar. Toca “abrir” para leer la fuente, o “➕ prospecto” para profundizar.</div>
+  <div id="evidencias"></div>
+</section>
 
-<label class="req">Categoría (ecosistema)</label>
-<select id="categoria">
-  <option value="VC">VC — fondo / venture capital</option>
-  <option value="Startup">Startup</option>
-  <option value="Incubadora">Incubadora / Aceleradora</option>
-  <option value="Corporativo">Corporativo</option>
-</select>
-
-<label>Discurso corporativo (Thick Data)</label>
-<textarea id="discurso" placeholder="Tesis de inversión, promesa de valor, programa, comunicado…"></textarea>
-
-<label>Tipo de discurso</label>
-<input id="tipo_discurso" placeholder="tesis_inversion | promesa_valor | programa | comunicado…">
-
-<label>URL / perfil de origen</label>
-<input id="url_perfil" placeholder="https://…">
-
-<label>Fuente del discurso</label>
-<input id="fuente_discurso" placeholder="sitio_oficial, linkedin, prensa…">
-
-<button id="enviar">Guardar prospecto</button>
-<div id="msg"></div>
+<section>
+  <h2>③ Alta de prospecto</h2>
+  <label class="req">Nombre</label>
+  <input id="nombre" placeholder="p. ej. Kaszek">
+  <label class="req">Categoría (ecosistema)</label>
+  <select id="categoria">
+    <option value="VC">VC — fondo / venture capital</option>
+    <option value="Startup">Startup</option>
+    <option value="Incubadora">Incubadora / Aceleradora</option>
+    <option value="Corporativo">Corporativo</option>
+  </select>
+  <label>Discurso corporativo (Thick Data)</label>
+  <textarea id="discurso" placeholder="Tesis de inversión, promesa de valor, programa, comunicado…"></textarea>
+  <label>Tipo de discurso</label>
+  <input id="tipo_discurso" placeholder="tesis_inversion | promesa_valor | programa…">
+  <label>URL / perfil de origen</label>
+  <input id="url_perfil" placeholder="https://…">
+  <label>Fuente del discurso</label>
+  <input id="fuente_discurso" placeholder="sitio_oficial, linkedin, prensa…">
+  <button id="enviar">Guardar prospecto</button>
+  <div class="msg" id="msg"></div>
+</section>
 
 <script>
   const $ = id => document.getElementById(id);
+  const esc = s => (s||"").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
   $("token").value = localStorage.getItem("hd_ingest_token") || "";
+  const tok = () => { const t = $("token").value.trim(); localStorage.setItem("hd_ingest_token", t); return t; };
 
   async function refrescarConteo() {
     try {
-      const r = await fetch("/prospectos/categorias");
-      const d = await r.json();
+      const d = await (await fetch("/prospectos/categorias")).json();
       $("counts").innerHTML = Object.entries(d.categorias)
         .map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join("");
     } catch (e) {}
   }
   refrescarConteo();
 
+  // ① Scraping
+  $("s_btn").addEventListener("click", async () => {
+    const m = $("s_msg"), empresa = $("s_empresa").value.trim(), token = tok();
+    if (!token) { m.className = "msg err"; m.textContent = "Falta el token."; return; }
+    if (!empresa) { m.className = "msg err"; m.textContent = "Escribe una empresa."; return; }
+    $("s_btn").disabled = true; m.className = "msg"; m.style.display = "block"; m.textContent = "Rastreando… (puede tardar unos segundos)";
+    try {
+      const r = await fetch("/scrape", { method: "POST",
+        headers: { "Content-Type": "application/json", "X-Ingest-Token": token },
+        body: JSON.stringify({ empresa, tipo_evento: $("s_tipo").value, connectors: $("s_fuentes").value.split(",") }) });
+      const d = await r.json();
+      if (!r.ok) { m.className = "msg err"; m.textContent = "Error: " + (d.detail || r.status); return; }
+      m.className = "msg ok"; m.textContent = `✓ ${d.total_escritos} señales nuevas guardadas para ${empresa}.`;
+      $("nombre").value = empresa;               // precarga para ③
+      cargarEvidencias(empresa);
+    } catch (e) { m.className = "msg err"; m.textContent = "Error de red: " + e; }
+    finally { $("s_btn").disabled = false; }
+  });
+
+  // ② Listar evidencias
+  async function cargarEvidencias(empresa) {
+    const cont = $("evidencias");
+    try {
+      const d = await (await fetch("/evidencias?limite=25&empresa=" + encodeURIComponent(empresa))).json();
+      if (!d.items.length) { cont.innerHTML = '<div class="hint">Sin señales fechadas todavía.</div>'; return; }
+      cont.innerHTML = d.items.map(e => `
+        <div class="card">
+          <div>${esc(e.cita_textual)}</div>
+          <div class="meta">${esc(e.nombre_medio)} · ${esc(e.tipo_evento)} · ${(e.fecha_publicacion||"").slice(0,10)}
+            · <a href="${esc(e.url_fuente)}" target="_blank" rel="noopener">abrir ↗</a></div>
+          <button class="sec" onclick="prefill('${esc(e.empresa_mencionada)}')">➕ Guardar como prospecto</button>
+        </div>`).join("");
+    } catch (e) { cont.innerHTML = '<div class="hint">No se pudieron cargar.</div>'; }
+  }
+  window.prefill = (nombre) => { $("nombre").value = nombre; $("nombre").scrollIntoView({behavior:"smooth"}); };
+
+  // ③ Alta prospecto
   $("enviar").addEventListener("click", async () => {
-    const msg = $("msg");
-    const token = $("token").value.trim();
-    localStorage.setItem("hd_ingest_token", token);
-    const body = {
-      nombre: $("nombre").value.trim(),
-      categoria: $("categoria").value,
+    const m = $("msg"), token = tok();
+    const body = { nombre: $("nombre").value.trim(), categoria: $("categoria").value,
       discurso_corporativo: $("discurso").value.trim() || null,
       tipo_discurso: $("tipo_discurso").value.trim() || null,
       url_perfil: $("url_perfil").value.trim() || null,
-      fuente_discurso: $("fuente_discurso").value.trim() || null,
-    };
-    if (!token) { msg.className = "err"; msg.textContent = "Falta el token de ingesta."; return; }
-    if (!body.nombre) { msg.className = "err"; msg.textContent = "Falta el nombre."; return; }
+      fuente_discurso: $("fuente_discurso").value.trim() || null };
+    if (!token) { m.className = "msg err"; m.textContent = "Falta el token."; return; }
+    if (!body.nombre) { m.className = "msg err"; m.textContent = "Falta el nombre."; return; }
     $("enviar").disabled = true;
     try {
-      const r = await fetch("/prospectos", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Ingest-Token": token },
-        body: JSON.stringify(body),
-      });
+      const r = await fetch("/prospectos", { method: "POST",
+        headers: { "Content-Type": "application/json", "X-Ingest-Token": token }, body: JSON.stringify(body) });
       const d = await r.json();
-      if (r.ok) {
-        msg.className = "ok";
-        msg.textContent = `✓ ${body.nombre} [${body.categoria}] — ${d.accion}.`;
-        $("nombre").value = ""; $("discurso").value = ""; $("tipo_discurso").value = "";
-        $("url_perfil").value = ""; $("fuente_discurso").value = "";
+      if (r.ok) { m.className = "msg ok"; m.textContent = `✓ ${body.nombre} [${body.categoria}] — ${d.accion}.`;
+        $("discurso").value = ""; $("tipo_discurso").value = ""; $("url_perfil").value = ""; $("fuente_discurso").value = "";
         refrescarConteo();
-      } else {
-        msg.className = "err";
-        msg.textContent = "Error: " + (d.detail || r.status);
-      }
-    } catch (e) {
-      msg.className = "err"; msg.textContent = "Error de red: " + e;
-    } finally {
-      $("enviar").disabled = false;
-    }
+      } else { m.className = "msg err"; m.textContent = "Error: " + (d.detail || r.status); }
+    } catch (e) { m.className = "msg err"; m.textContent = "Error de red: " + e; }
+    finally { $("enviar").disabled = false; }
   });
 </script>
 </body></html>"""

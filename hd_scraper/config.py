@@ -62,6 +62,9 @@ class Settings:
     # Retención del crudo (HTML/JSON comprimido) en disco.
     raw_dir: Path = RAW_DIR
     raw_retention_days: int = _int("HD_RAW_RETENTION_DAYS", 90)
+    # Persistencia del crudo. En Vercel el disco es efímero (/tmp), así que se
+    # apaga (HD_RAW_ENABLED=0) para no dejar filas apuntando a archivos perdidos.
+    raw_enabled: bool = os.getenv("HD_RAW_ENABLED", "1") not in ("0", "false", "False")
 
     # Scheduler: corridas programadas cada N horas.
     schedule_hours: int = _int("HD_SCHEDULE_HOURS", 12)

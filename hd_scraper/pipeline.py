@@ -15,6 +15,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from .config import settings
 from .connectors.base import Connector
 from .db.database import Database
 from .db.models import ESTADO_NO_FECHADO, EvidenceRecord, QuerySpec, ahora_iso
@@ -112,8 +113,10 @@ def run_connector(db: Database, connector: Connector, query: QuerySpec) -> RunRe
 
             record.estado = veredicto.estado
             # Retención del crudo comprimido, vinculado por hash antes de escribir.
-            guardar_crudo(db, record.hash_dedup, raw)
-            record.raw_hash = record.hash_dedup
+            # Se omite si el disco es efímero (p. ej. Vercel): HD_RAW_ENABLED=0.
+            if settings.raw_enabled:
+                guardar_crudo(db, record.hash_dedup, raw)
+                record.raw_hash = record.hash_dedup
 
             if _escribir_evidencia(db, record):
                 res.escritos += 1
