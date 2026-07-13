@@ -10,7 +10,10 @@ devuelven por los endpoints de evidencia.
 """
 from __future__ import annotations
 
+import csv
 import hmac
+import io
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -108,6 +111,8 @@ def raiz() -> dict:
             "GET /prospectos": "prospectos por ecosistema (filtros: categoria, q, con_discurso)",
             "GET /prospectos/categorias": "conteo de prospectos por ecosistema",
             "GET /prospectos/{id}": "un prospecto por id (incluye Thick Data)",
+            "GET /prospectos/export.csv": "descarga los prospectos en CSV (filtro: categoria)",
+            "GET /prospectos/export.json": "descarga los prospectos en JSON (filtro: categoria)",
             "POST /prospectos": "alta de prospecto (requiere X-Ingest-Token)",
             "POST /scrape": "rastreo bajo demanda de una empresa (requiere X-Ingest-Token)",
             "GET /admin": "panel web: buscar señales, revisar y dar de alta prospectos",
@@ -258,6 +263,47 @@ def prospectos_por_categoria() -> dict:
     for f in filas:
         conteo[f["categoria"]] = f["n"]
     return {"categorias": conteo}
+
+
+_EXPORT_COLS = ["id", "nombre", "categoria", "tipo_discurso", "url_perfil",
+                "fuente_discurso", "fecha_captura", "discurso_corporativo",
+                "creado_en", "actualizado_en"]
+
+
+def _prospectos_filtrados(categoria: Optional[str]) -> list:
+    if categoria is not None and categoria not in CATEGORIAS:
+        raise HTTPException(400, f"categoria inválida: {categoria}")
+    db = get_db()
+    if categoria:
+        return db.fetch_all(
+            "SELECT * FROM prospectos WHERE categoria = ? ORDER BY nombre ASC", (categoria,))
+    return db.fetch_all("SELECT * FROM prospectos ORDER BY categoria, nombre ASC")
+
+
+@app.get("/prospectos/export.csv")
+def export_csv(categoria: Optional[str] = Query(None, description="Filtra por ecosistema")) -> Response:
+    """Descarga los prospectos como CSV (abrible en Excel/Sheets)."""
+    filas = _prospectos_filtrados(categoria)
+    buf = io.StringIO()
+    buf.write("﻿")  # BOM: Excel abre bien el UTF-8
+    w = csv.writer(buf)
+    w.writerow(_EXPORT_COLS)
+    for f in filas:
+        w.writerow([f[c] if f[c] is not None else "" for c in _EXPORT_COLS])
+    nombre = f"prospectos_{categoria or 'todos'}.csv"
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
+
+
+@app.get("/prospectos/export.json")
+def export_json(categoria: Optional[str] = Query(None, description="Filtra por ecosistema")) -> Response:
+    """Descarga los prospectos como JSON."""
+    filas = _prospectos_filtrados(categoria)
+    datos = [_row_a_prospecto(f) for f in filas]
+    nombre = f"prospectos_{categoria or 'todos'}.json"
+    return Response(json.dumps(datos, ensure_ascii=False, indent=2),
+                    media_type="application/json; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nombre}"'})
 
 
 @app.get("/prospectos/{prospecto_id}")
@@ -475,6 +521,8 @@ _ADMIN_HTML = """<!doctype html>
   .row > * { flex: 1; }
   .cats { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: .6rem; }
   .cat { margin-top: 0; background: transparent; color: inherit; border: 1px solid #2563eb; font-weight: 600; }
+  .dl { display: block; text-align: center; text-decoration: none; color: inherit;
+    padding: .7rem; border: 1px solid rgba(128,128,128,.5); border-radius: .5rem; font-weight: 600; }
 </style></head><body>
 <h1>hd-prospector · Radar</h1>
 <p class="sub">① Rastrea por ecosistema (o por nombre) → ② revisa las señales → ③ guarda el prospecto con su discurso. El motor extrae y almacena; no interpreta.</p>
@@ -570,6 +618,13 @@ _ADMIN_HTML = """<!doctype html>
   <input id="fuente_discurso" placeholder="sitio_oficial, linkedin, prensa…">
   <button id="enviar">Guardar prospecto</button>
   <div class="msg" id="msg"></div>
+
+  <h2 style="margin-top:1.3rem">Exportar</h2>
+  <div class="hint">Descarga tus prospectos guardados (todos los ecosistemas).</div>
+  <div class="row" style="margin-top:.6rem">
+    <a class="dl" href="/prospectos/export.csv">⬇️ CSV</a>
+    <a class="dl" href="/prospectos/export.json">⬇️ JSON</a>
+  </div>
 </section>
 
 <script>
