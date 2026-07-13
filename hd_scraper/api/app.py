@@ -22,7 +22,7 @@ from ..config import settings
 from ..connectors import REGISTRY
 from ..db.database import get_db
 from ..db.models import CATEGORIAS, ESTADO_OK, TIPOS_EVENTO, QuerySpec
-from ..discovery import queries_para
+from ..discovery import REGIONES, queries_para, region_clause
 from ..pipeline import run_connector
 from ..prospectos import nuevo_prospecto, upsert_prospecto
 from ..validation.validator import validate_prospecto
@@ -306,6 +306,7 @@ class ScrapeIn(BaseModel):
     empresa: Optional[str] = None
     categoria: Optional[str] = None
     tipo_evento: str = "ronda"
+    region: str = "LATAM"     # zona geográfica: LATAM (8 países) o un país
     connectors: list[str] = list(CONECTORES_SCRAPE)
 
 
@@ -336,6 +337,9 @@ def scrape(payload: ScrapeIn, x_ingest_token: Optional[str] = Header(None)) -> d
     - Por nombre (``empresa``): rastrea una empresa concreta. Para profundizar.
     """
     _exigir_token(x_ingest_token)
+    if payload.region not in REGIONES:
+        raise HTTPException(400, f"region inválida: {payload.region}")
+    zona = region_clause(payload.region)  # p. ej. (México OR Colombia OR …)
     db = get_db()
     resultados: list[dict] = []
 
@@ -345,20 +349,21 @@ def scrape(payload: ScrapeIn, x_ingest_token: Optional[str] = Header(None)) -> d
         if payload.tipo_evento not in TIPOS_EVENTO:
             raise HTTPException(400, f"tipo_evento inválido: {payload.tipo_evento}")
         # Descubrimiento: solo Google News (rápido) sobre las consultas del
-        # ecosistema + el tipo de señal elegido, en modo AMPLIO (exact=False).
+        # ecosistema + el tipo de señal, acotado a la zona geográfica (terminos).
         for termino, tipo in queries_para(payload.categoria, payload.tipo_evento):
-            query = QuerySpec(empresa=termino, tipo_evento=tipo,
+            query = QuerySpec(empresa=termino, tipo_evento=tipo, terminos=zona,
                               categoria=payload.categoria, exact=False)
             resultados += _correr_query(db, query, ["google_news"])
         modo = {"modo": "categoria", "categoria": payload.categoria,
-                "tipo_evento": payload.tipo_evento}
+                "tipo_evento": payload.tipo_evento, "region": payload.region}
     elif payload.empresa and payload.empresa.strip():
         if payload.tipo_evento not in TIPOS_EVENTO:
             raise HTTPException(400, f"tipo_evento inválido: {payload.tipo_evento}")
-        query = QuerySpec(empresa=payload.empresa.strip(), tipo_evento=payload.tipo_evento)
+        query = QuerySpec(empresa=payload.empresa.strip(), tipo_evento=payload.tipo_evento,
+                          terminos=zona)
         resultados += _correr_query(db, query, payload.connectors)
         modo = {"modo": "empresa", "empresa": payload.empresa.strip(),
-                "tipo_evento": payload.tipo_evento}
+                "tipo_evento": payload.tipo_evento, "region": payload.region}
     else:
         raise HTTPException(400, "indica una empresa o una categoria")
 
@@ -477,6 +482,18 @@ _ADMIN_HTML = """<!doctype html>
 <label class="req">Token de acceso</label>
 <input id="token" type="password" placeholder="HD_INGEST_TOKEN" autocomplete="off">
 <div class="hint">Se guarda solo en este dispositivo. Es el valor que pusiste en Vercel.</div>
+<label>Región (zona geográfica)</label>
+<select id="region">
+  <option value="LATAM">Toda LATAM (8 países)</option>
+  <option value="México">México</option>
+  <option value="Colombia">Colombia</option>
+  <option value="Chile">Chile</option>
+  <option value="Perú">Perú</option>
+  <option value="Argentina">Argentina</option>
+  <option value="Brasil">Brasil</option>
+  <option value="Costa Rica">Costa Rica</option>
+  <option value="Panamá">Panamá</option>
+</select>
 <div class="counts" id="counts"></div>
 
 <section>
@@ -593,17 +610,20 @@ _ADMIN_HTML = """<!doctype html>
     finally { document.querySelectorAll("button").forEach(b => b.disabled = false); }
   }
 
+  const region = () => $("region").value;
+
   document.querySelectorAll(".cat").forEach(btn => btn.addEventListener("click", () => {
     const cat = btn.dataset.cat, tipo = $("c_tipo").value;
     if ($("categoria")) $("categoria").value = cat;   // precarga categoría en ③
-    scrapear({ categoria: cat, tipo_evento: tipo }, `${cat} · ${tipo}`, () => cargarEvidencias({ categoria: cat }));
+    scrapear({ categoria: cat, tipo_evento: tipo, region: region() },
+             `${cat} · ${tipo} · ${region()}`, () => cargarEvidencias({ categoria: cat }));
   }));
 
   $("s_btn").addEventListener("click", () => {
     const empresa = $("s_empresa").value.trim();
     if (!empresa) { const m = $("s_msg"); m.className = "msg err"; m.style.display = "block"; m.textContent = "Escribe una empresa."; return; }
     $("nombre").value = empresa;                       // precarga para ③
-    scrapear({ empresa, tipo_evento: $("s_tipo").value, connectors: $("s_fuentes").value.split(",") },
+    scrapear({ empresa, tipo_evento: $("s_tipo").value, region: region(), connectors: $("s_fuentes").value.split(",") },
              empresa, () => cargarEvidencias({ empresa }));
   });
 

@@ -89,5 +89,20 @@ def test_scrape_categoria_tipo_invalido_400(cli):
     assert r.status_code == 400
 
 
+def test_scrape_region_por_defecto_latam(cli):
+    r = cli.post("/scrape", json={"categoria": "VC"}, headers=H)
+    assert r.status_code == 200 and r.json()["region"] == "LATAM"
+
+
+def test_scrape_region_pais(cli):
+    r = cli.post("/scrape", json={"categoria": "VC", "region": "Colombia"}, headers=H)
+    assert r.status_code == 200 and r.json()["region"] == "Colombia"
+
+
+def test_scrape_region_invalida_400(cli):
+    r = cli.post("/scrape", json={"categoria": "VC", "region": "Europa"}, headers=H)
+    assert r.status_code == 400
+
+
 def test_scrape_sin_empresa_ni_categoria_400(cli):
     assert cli.post("/scrape", json={}, headers=H).status_code == 400
