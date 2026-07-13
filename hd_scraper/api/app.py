@@ -21,6 +21,7 @@ from ..config import settings
 from ..connectors import REGISTRY
 from ..db.database import get_db
 from ..db.models import CATEGORIAS, ESTADO_OK, TIPOS_EVENTO, QuerySpec
+from ..discovery import queries_para
 from ..pipeline import run_connector
 from ..prospectos import nuevo_prospecto, upsert_prospecto
 from ..validation.validator import validate_prospecto
@@ -85,6 +86,7 @@ def _row_a_evidencia(row) -> dict:
         "cargo": row["cargo"],
         "tipo_evento": row["tipo_evento"],
         "origen_declaracion": row["origen_declaracion"],
+        "categoria": row["categoria"],
         "hash_dedup": row["hash_dedup"],
     }
 
@@ -132,6 +134,7 @@ def health() -> dict:
 def listar_evidencias(
     empresa: Optional[str] = Query(None, description="Filtra por empresa_mencionada"),
     tipo_evento: Optional[str] = Query(None, description="Filtra por tipo_evento"),
+    categoria: Optional[str] = Query(None, description="Filtra por ecosistema (descubrimiento)"),
     desde: Optional[str] = Query(None, description="fecha_publicacion >= (ISO 8601)"),
     hasta: Optional[str] = Query(None, description="fecha_publicacion <= (ISO 8601)"),
     limite: int = Query(50, ge=1, le=500),
@@ -139,6 +142,8 @@ def listar_evidencias(
 ) -> dict:
     if tipo_evento is not None and tipo_evento not in TIPOS_EVENTO:
         raise HTTPException(400, f"tipo_evento inválido: {tipo_evento}")
+    if categoria is not None and categoria not in CATEGORIAS:
+        raise HTTPException(400, f"categoria inválida: {categoria}")
 
     # Solo consumibles: estado = 'ok' (excluye no_fechado por contrato).
     where = ["estado = ?"]
@@ -149,6 +154,9 @@ def listar_evidencias(
     if tipo_evento:
         where.append("tipo_evento = ?")
         params.append(tipo_evento)
+    if categoria:
+        where.append("categoria = ?")
+        params.append(categoria)
     if desde:
         where.append("fecha_publicacion >= ?")
         params.append(desde)
@@ -293,42 +301,63 @@ CONECTORES_SCRAPE = ("google_news", "gdelt")
 
 
 class ScrapeIn(BaseModel):
-    empresa: str
+    # Modo por nombre: empresa. Modo descubrimiento por ecosistema: categoria.
+    empresa: Optional[str] = None
+    categoria: Optional[str] = None
     tipo_evento: str = "ronda"
     connectors: list[str] = list(CONECTORES_SCRAPE)
 
 
-@app.post("/scrape")
-def scrape(payload: ScrapeIn, x_ingest_token: Optional[str] = Header(None)) -> dict:
-    """Rastrea señales de una empresa AL MOMENTO y las guarda (evidencia).
-
-    Descubrimiento manual: el operador escribe una empresa; el motor corre los
-    conectores rápidos y escribe la evidencia. Pensado para disparar desde /admin.
-    """
-    _exigir_token(x_ingest_token)
-    if payload.tipo_evento not in TIPOS_EVENTO:
-        raise HTTPException(400, f"tipo_evento inválido: {payload.tipo_evento}")
-    if not payload.empresa.strip():
-        raise HTTPException(400, "empresa vacía")
-
-    db = get_db()
-    resultados = []
-    for cname in payload.connectors:
+def _correr_query(db, query, connectors) -> list[dict]:
+    salida = []
+    for cname in connectors:
         cls = REGISTRY.get(cname)
         if cls is None or cls.requires_slug or cname not in CONECTORES_SCRAPE:
-            resultados.append({"connector": cname, "error": "no disponible para scraping bajo demanda"})
+            salida.append({"connector": cname, "error": "no disponible para scraping bajo demanda"})
             continue
-        query = QuerySpec(empresa=payload.empresa.strip(), tipo_evento=payload.tipo_evento)
         with cls() as conn:
             res = run_connector(db, conn, query)
-        resultados.append({
-            "connector": cname, "vistos": res.vistos, "escritos": res.escritos,
-            "no_fechados": res.no_fechados, "duplicados": res.duplicados,
-            "rechazados": res.rechazados, "errores": len(res.errores),
+        salida.append({
+            "connector": cname, "consulta": query.empresa, "vistos": res.vistos,
+            "escritos": res.escritos, "no_fechados": res.no_fechados,
+            "duplicados": res.duplicados, "rechazados": res.rechazados,
+            "errores": len(res.errores),
         })
+    return salida
+
+
+@app.post("/scrape")
+def scrape(payload: ScrapeIn, x_ingest_token: Optional[str] = Header(None)) -> dict:
+    """Rastrea señales AL MOMENTO y las guarda (evidencia). Dos modos:
+
+    - Por ecosistema (``categoria``): corre las consultas temáticas declaradas
+      del ecosistema y etiqueta la evidencia con esa categoría. Para descubrir.
+    - Por nombre (``empresa``): rastrea una empresa concreta. Para profundizar.
+    """
+    _exigir_token(x_ingest_token)
+    db = get_db()
+    resultados: list[dict] = []
+
+    if payload.categoria:
+        if payload.categoria not in CATEGORIAS:
+            raise HTTPException(400, f"categoria inválida: {payload.categoria}")
+        # Descubrimiento: solo Google News (rápido) sobre las consultas del ecosistema.
+        for termino, tipo in queries_para(payload.categoria):
+            query = QuerySpec(empresa=termino, tipo_evento=tipo, categoria=payload.categoria)
+            resultados += _correr_query(db, query, ["google_news"])
+        modo = {"modo": "categoria", "categoria": payload.categoria}
+    elif payload.empresa and payload.empresa.strip():
+        if payload.tipo_evento not in TIPOS_EVENTO:
+            raise HTTPException(400, f"tipo_evento inválido: {payload.tipo_evento}")
+        query = QuerySpec(empresa=payload.empresa.strip(), tipo_evento=payload.tipo_evento)
+        resultados += _correr_query(db, query, payload.connectors)
+        modo = {"modo": "empresa", "empresa": payload.empresa.strip(),
+                "tipo_evento": payload.tipo_evento}
+    else:
+        raise HTTPException(400, "indica una empresa o una categoria")
+
     total = sum(r.get("escritos", 0) for r in resultados)
-    return {"empresa": payload.empresa.strip(), "tipo_evento": payload.tipo_evento,
-            "total_escritos": total, "resultados": resultados}
+    return {**modo, "total_escritos": total, "resultados": resultados}
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -373,9 +402,11 @@ _ADMIN_HTML = """<!doctype html>
   .card a { color: #3b82f6; text-decoration: none; }
   .row { display: flex; gap: .5rem; }
   .row > * { flex: 1; }
+  .cats { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: .6rem; }
+  .cat { margin-top: 0; background: transparent; color: inherit; border: 1px solid #2563eb; font-weight: 600; }
 </style></head><body>
 <h1>hd-prospector · Radar</h1>
-<p class="sub">① Rastrea señales de una empresa → ② revísalas → ③ guárdala como prospecto con su discurso. El motor extrae y almacena; no interpreta.</p>
+<p class="sub">① Rastrea por ecosistema (o por nombre) → ② revisa las señales → ③ guarda el prospecto con su discurso. El motor extrae y almacena; no interpreta.</p>
 
 <label class="req">Token de acceso</label>
 <input id="token" type="password" placeholder="HD_INGEST_TOKEN" autocomplete="off">
@@ -383,8 +414,18 @@ _ADMIN_HTML = """<!doctype html>
 <div class="counts" id="counts"></div>
 
 <section>
-  <h2>① Buscar señales (scraping)</h2>
-  <label class="req">Empresa</label>
+  <h2>① Buscar por ecosistema</h2>
+  <div class="hint">Un toque rastrea ese ecosistema (consultas temáticas) y etiqueta las señales. Para descubrir sin teclear nombres.</div>
+  <div class="cats">
+    <button class="cat" data-cat="VC">VC</button>
+    <button class="cat" data-cat="Startup">Startup</button>
+    <button class="cat" data-cat="Incubadora">Incubadora</button>
+    <button class="cat" data-cat="Corporativo">Corporativo</button>
+  </div>
+  <div class="msg" id="s_msg"></div>
+
+  <h2 style="margin-top:1.4rem">…o buscar por nombre</h2>
+  <label>Empresa</label>
   <input id="s_empresa" placeholder="p. ej. Nubank">
   <div class="row">
     <div>
@@ -407,8 +448,7 @@ _ADMIN_HTML = """<!doctype html>
       </select>
     </div>
   </div>
-  <button id="s_btn">🔎 Buscar señales</button>
-  <div class="msg" id="s_msg"></div>
+  <button id="s_btn">🔎 Buscar por nombre</button>
 </section>
 
 <section>
@@ -455,37 +495,51 @@ _ADMIN_HTML = """<!doctype html>
   }
   refrescarConteo();
 
-  // ① Scraping
-  $("s_btn").addEventListener("click", async () => {
-    const m = $("s_msg"), empresa = $("s_empresa").value.trim(), token = tok();
+  // ① Descubrimiento por ecosistema
+  async function scrapear(body, etiqueta, cargar) {
+    const m = $("s_msg"), token = tok();
     if (!token) { m.className = "msg err"; m.textContent = "Falta el token."; return; }
-    if (!empresa) { m.className = "msg err"; m.textContent = "Escribe una empresa."; return; }
-    $("s_btn").disabled = true; m.className = "msg"; m.style.display = "block"; m.textContent = "Rastreando… (puede tardar unos segundos)";
+    document.querySelectorAll("button").forEach(b => b.disabled = true);
+    m.className = "msg"; m.style.display = "block"; m.textContent = "Rastreando " + etiqueta + "… (unos segundos)";
     try {
       const r = await fetch("/scrape", { method: "POST",
         headers: { "Content-Type": "application/json", "X-Ingest-Token": token },
-        body: JSON.stringify({ empresa, tipo_evento: $("s_tipo").value, connectors: $("s_fuentes").value.split(",") }) });
+        body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok) { m.className = "msg err"; m.textContent = "Error: " + (d.detail || r.status); return; }
-      m.className = "msg ok"; m.textContent = `✓ ${d.total_escritos} señales nuevas guardadas para ${empresa}.`;
-      $("nombre").value = empresa;               // precarga para ③
-      cargarEvidencias(empresa);
+      m.className = "msg ok"; m.textContent = `✓ ${d.total_escritos} señales nuevas en ${etiqueta}.`;
+      cargar();
     } catch (e) { m.className = "msg err"; m.textContent = "Error de red: " + e; }
-    finally { $("s_btn").disabled = false; }
+    finally { document.querySelectorAll("button").forEach(b => b.disabled = false); }
+  }
+
+  document.querySelectorAll(".cat").forEach(btn => btn.addEventListener("click", () => {
+    const cat = btn.dataset.cat;
+    if ($("categoria")) $("categoria").value = cat;   // precarga categoría en ③
+    scrapear({ categoria: cat }, "ecosistema " + cat, () => cargarEvidencias({ categoria: cat }));
+  }));
+
+  $("s_btn").addEventListener("click", () => {
+    const empresa = $("s_empresa").value.trim();
+    if (!empresa) { const m = $("s_msg"); m.className = "msg err"; m.style.display = "block"; m.textContent = "Escribe una empresa."; return; }
+    $("nombre").value = empresa;                       // precarga para ③
+    scrapear({ empresa, tipo_evento: $("s_tipo").value, connectors: $("s_fuentes").value.split(",") },
+             empresa, () => cargarEvidencias({ empresa }));
   });
 
-  // ② Listar evidencias
-  async function cargarEvidencias(empresa) {
+  // ② Listar evidencias (por empresa o por categoría)
+  async function cargarEvidencias(filtro) {
     const cont = $("evidencias");
+    const qs = new URLSearchParams({ limite: "25", ...filtro });
     try {
-      const d = await (await fetch("/evidencias?limite=25&empresa=" + encodeURIComponent(empresa))).json();
-      if (!d.items.length) { cont.innerHTML = '<div class="hint">Sin señales fechadas todavía.</div>'; return; }
+      const d = await (await fetch("/evidencias?" + qs)).json();
+      if (!d.items.length) { cont.innerHTML = '<div class="hint">Sin señales fechadas todavía. Prueba otra categoría o revisa /stats.</div>'; return; }
       cont.innerHTML = d.items.map(e => `
         <div class="card">
           <div>${esc(e.cita_textual)}</div>
-          <div class="meta">${esc(e.nombre_medio)} · ${esc(e.tipo_evento)} · ${(e.fecha_publicacion||"").slice(0,10)}
+          <div class="meta">${esc(e.nombre_medio)} · ${esc(e.tipo_evento)}${e.categoria ? " · " + esc(e.categoria) : ""} · ${(e.fecha_publicacion||"").slice(0,10)}
             · <a href="${esc(e.url_fuente)}" target="_blank" rel="noopener">abrir ↗</a></div>
-          <button class="sec" onclick="prefill('${esc(e.empresa_mencionada)}')">➕ Guardar como prospecto</button>
+          <button class="sec" onclick="prefill(this.dataset.n)" data-n="${esc(e.empresa_mencionada)}">➕ Guardar como prospecto</button>
         </div>`).join("");
     } catch (e) { cont.innerHTML = '<div class="hint">No se pudieron cargar.</div>'; }
   }

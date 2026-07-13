@@ -54,8 +54,8 @@ def _escribir_evidencia(db: Database, record: EvidenceRecord) -> bool:
             cita_textual, fecha_extraccion, url_fuente, nombre_medio,
             empresa_mencionada, tipo_evento, origen_declaracion, hash_dedup,
             fecha_publicacion, persona_citada, cargo,
-            connector, estado, raw_hash, creado_en
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            connector, estado, raw_hash, categoria, creado_en
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (hash_dedup) DO NOTHING
         """,
         (
@@ -63,7 +63,7 @@ def _escribir_evidencia(db: Database, record: EvidenceRecord) -> bool:
             record.nombre_medio, record.empresa_mencionada, record.tipo_evento,
             record.origen_declaracion, record.hash_dedup, record.fecha_publicacion,
             record.persona_citada, record.cargo, record.connector, record.estado,
-            record.raw_hash, record.creado_en,
+            record.raw_hash, record.categoria, record.creado_en,
         ),
     )
     return cur.rowcount > 0
@@ -103,6 +103,7 @@ def run_connector(db: Database, connector: Connector, query: QuerySpec) -> RunRe
         res.vistos += 1
         try:
             record = connector.normalize(raw)
+            record.categoria = query.categoria  # etiqueta de ecosistema (descubrimiento por categoría)
             veredicto = connector.validate(record)
 
             if not veredicto.ok:

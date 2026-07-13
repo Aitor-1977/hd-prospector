@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS evidencias (
     connector           TEXT NOT NULL,
     estado              TEXT NOT NULL DEFAULT 'ok',  -- ok | no_fechado
     raw_hash            TEXT,                   -- enlace al crudo retenido (raw_store)
+    categoria           TEXT,                   -- ecosistema si viene de descubrimiento por categoría
     creado_en           TEXT NOT NULL
 );
 
@@ -34,6 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_evidencias_empresa ON evidencias (empresa_mencion
 CREATE INDEX IF NOT EXISTS idx_evidencias_tipo    ON evidencias (tipo_evento);
 CREATE INDEX IF NOT EXISTS idx_evidencias_estado  ON evidencias (estado);
 CREATE INDEX IF NOT EXISTS idx_evidencias_fpub    ON evidencias (fecha_publicacion);
+CREATE INDEX IF NOT EXISTS idx_evidencias_categoria ON evidencias (categoria);
 
 -- Rechazos: todo registro que no pasa el validador, con su motivo. Auditable.
 CREATE TABLE IF NOT EXISTS rechazos (

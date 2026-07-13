@@ -109,11 +109,14 @@ sí tienen una intake autenticada del operador:
 - `POST /prospectos` y `POST /prospectos/bulk` — requieren la cabecera
   `X-Ingest-Token` igual a `HD_INGEST_TOKEN`. Sin ese token configurado, la
   escritura está **deshabilitada** (503). Reusan `upsert_prospecto`.
-- `POST /scrape` — rastreo **bajo demanda** de una empresa (Google News + GDELT)
-  que escribe evidencia al momento. Requiere `X-Ingest-Token`. Corre en una
-  función serverless (no necesita host always-on); el scheduler cada 12 h sí lo
-  necesita. Con disco efímero, la retención de crudo se apaga con
-  `HD_RAW_ENABLED=0`.
+- `POST /scrape` — rastreo **bajo demanda** que escribe evidencia al momento.
+  Requiere `X-Ingest-Token`. Dos modos:
+  - **Por ecosistema** (`{"categoria": "VC"}`): corre las consultas temáticas
+    declaradas del ecosistema (ver `hd_scraper/discovery.py`) y **etiqueta** la
+    evidencia con esa categoría. Para descubrir sin nombrar empresas.
+  - **Por nombre** (`{"empresa": "Nubank"}`): rastrea una empresa concreta.
+  Corre en función serverless (no necesita host always-on); el scheduler cada
+  12 h sí. Con disco efímero, la retención de crudo se apaga con `HD_RAW_ENABLED=0`.
 - `GET /admin` — panel web autocontenido (móvil) con el flujo completo:
   ① **buscar señales** (scraping) → ② **revisar** lo encontrado → ③ dar de alta
   el prospecto con su discurso. Pega el token una vez y opera sin terminal.

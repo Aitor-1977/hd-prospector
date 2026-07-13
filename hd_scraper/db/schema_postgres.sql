@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS evidencias (
     connector           TEXT NOT NULL,
     estado              TEXT NOT NULL DEFAULT 'ok',
     raw_hash            TEXT,
+    categoria           TEXT,
     creado_en           TEXT NOT NULL
 );
 
@@ -28,6 +29,11 @@ CREATE INDEX IF NOT EXISTS idx_evidencias_empresa ON evidencias (empresa_mencion
 CREATE INDEX IF NOT EXISTS idx_evidencias_tipo    ON evidencias (tipo_evento);
 CREATE INDEX IF NOT EXISTS idx_evidencias_estado  ON evidencias (estado);
 CREATE INDEX IF NOT EXISTS idx_evidencias_fpub    ON evidencias (fecha_publicacion);
+-- Migración idempotente: añade columnas nuevas a una `evidencias` ya existente
+-- (Postgres soporta ADD COLUMN IF NOT EXISTS; en una base nueva es no-op).
+ALTER TABLE evidencias ADD COLUMN IF NOT EXISTS categoria TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_evidencias_categoria ON evidencias (categoria);
 
 CREATE TABLE IF NOT EXISTS rechazos (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -89,6 +89,7 @@ class QuerySpec:
     tipo_evento: str            # uno de TIPOS_EVENTO
     terminos: Optional[str] = None   # términos extra opcionales para la búsqueda
     slug: Optional[str] = None       # slug de empresa (para job boards)
+    categoria: Optional[str] = None  # ecosistema declarado (descubrimiento por categoría)
 
     def to_dict(self) -> dict:
         return {
@@ -96,6 +97,7 @@ class QuerySpec:
             "tipo_evento": self.tipo_evento,
             "terminos": self.terminos,
             "slug": self.slug,
+            "categoria": self.categoria,
         }
 
     @classmethod
@@ -105,6 +107,7 @@ class QuerySpec:
             tipo_evento=d["tipo_evento"],
             terminos=d.get("terminos"),
             slug=d.get("slug"),
+            categoria=d.get("categoria"),
         )
 
 
@@ -150,6 +153,7 @@ class EvidenceRecord:
     connector: str = ""
     estado: str = ESTADO_OK
     raw_hash: Optional[str] = None   # enlace al crudo retenido en disco
+    categoria: Optional[str] = None  # ecosistema (si viene de descubrimiento por categoría)
     creado_en: str = field(default_factory=ahora_iso)
 
     def campos_contrato(self) -> dict:
