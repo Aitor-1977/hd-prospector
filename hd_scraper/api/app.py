@@ -10,18 +10,64 @@ devuelven por los endpoints de evidencia.
 """
 from __future__ import annotations
 
+import hmac
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Query
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
+from ..config import settings
 from ..db.database import get_db
 from ..db.models import CATEGORIAS, ESTADO_OK, TIPOS_EVENTO
+from ..prospectos import nuevo_prospecto, upsert_prospecto
+from ..validation.validator import validate_prospecto
 
 app = FastAPI(
-    title="hd-scraper API (solo lectura)",
-    description="Capa de evidencia de Hamaca Digital. Extrae y almacena; no interpreta.",
-    version="0.1.0",
+    title="hd-prospector API",
+    description=(
+        "Capa de evidencia + prospectos de los cuatro ecosistemas. Extrae y "
+        "almacena; no interpreta. Evidencia: solo lectura. Prospectos: lectura "
+        "pública + intake autenticada del operador."
+    ),
+    version="0.2.0",
 )
+
+
+# --- Intake de prospectos (escritura autenticada del operador) -----------
+
+class ProspectoIn(BaseModel):
+    nombre: str
+    categoria: str
+    discurso_corporativo: Optional[str] = None
+    tipo_discurso: Optional[str] = None
+    url_perfil: Optional[str] = None
+    fuente_discurso: Optional[str] = None
+    fecha_captura: Optional[str] = None
+
+
+def _exigir_token(token: Optional[str]) -> None:
+    """Autoriza la intake. Sin HD_INGEST_TOKEN configurado, la escritura se apaga."""
+    esperado = settings.ingest_token
+    if not esperado:
+        raise HTTPException(503, "intake deshabilitada: configura HD_INGEST_TOKEN")
+    if not token or not hmac.compare_digest(token, esperado):
+        raise HTTPException(401, "token de ingesta inválido")
+
+
+def _alta(payload: ProspectoIn) -> dict:
+    record = nuevo_prospecto(
+        payload.nombre, payload.categoria,
+        discurso_corporativo=payload.discurso_corporativo,
+        tipo_discurso=payload.tipo_discurso,
+        url_perfil=payload.url_perfil,
+        fuente_discurso=payload.fuente_discurso,
+        fecha_captura=payload.fecha_captura,
+    )
+    veredicto = validate_prospecto(record)
+    if not veredicto.ok:
+        raise HTTPException(400, veredicto.motivo)
+    return upsert_prospecto(get_db(), record)
 
 
 def _row_a_evidencia(row) -> dict:
@@ -57,6 +103,8 @@ def raiz() -> dict:
             "GET /prospectos": "prospectos por ecosistema (filtros: categoria, q, con_discurso)",
             "GET /prospectos/categorias": "conteo de prospectos por ecosistema",
             "GET /prospectos/{id}": "un prospecto por id (incluye Thick Data)",
+            "POST /prospectos": "alta de prospecto (requiere X-Ingest-Token)",
+            "GET /admin": "formulario web de alta de prospectos",
             "GET /salud-fuentes": "salud por fuente/conector",
             "GET /stats": "contadores agregados",
             "GET /docs": "documentación interactiva (OpenAPI)",
@@ -207,6 +255,155 @@ def obtener_prospecto(prospecto_id: int) -> dict:
     if row is None:
         raise HTTPException(404, "prospecto no encontrado")
     return _row_a_prospecto(row)
+
+
+@app.post("/prospectos", status_code=201)
+def crear_prospecto(payload: ProspectoIn,
+                    x_ingest_token: Optional[str] = Header(None)) -> dict:
+    """Alta/actualización de un prospecto (intake autenticada del operador)."""
+    _exigir_token(x_ingest_token)
+    return _alta(payload)
+
+
+@app.post("/prospectos/bulk", status_code=201)
+def crear_prospectos_bulk(payloads: list[ProspectoIn] = Body(...),
+                          x_ingest_token: Optional[str] = Header(None)) -> dict:
+    """Alta masiva de prospectos. Reporta el resultado por cada uno."""
+    _exigir_token(x_ingest_token)
+    resultados = []
+    for p in payloads:
+        try:
+            r = _alta(p)
+            resultados.append({"nombre": p.nombre, "categoria": p.categoria, **r})
+        except HTTPException as exc:
+            resultados.append({"nombre": p.nombre, "categoria": p.categoria,
+                               "ok": False, "accion": "rechazado", "motivo": exc.detail})
+    return {"total": len(payloads), "resultados": resultados}
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_form() -> str:
+    """Pantalla de alta de prospectos (formulario web, sin dependencias externas)."""
+    return _ADMIN_HTML
+
+
+_ADMIN_HTML = """<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hd-prospector · Alta de prospectos</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0;
+         padding: 1.2rem; max-width: 640px; margin-inline: auto; line-height: 1.4; }
+  h1 { font-size: 1.3rem; margin: 0 0 .2rem; }
+  p.sub { margin: 0 0 1.2rem; opacity: .7; font-size: .9rem; }
+  label { display: block; font-weight: 600; margin: .8rem 0 .25rem; font-size: .9rem; }
+  input, select, textarea { width: 100%; padding: .6rem .7rem; border-radius: .5rem;
+    border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit;
+    font-size: 1rem; font-family: inherit; }
+  textarea { min-height: 110px; resize: vertical; }
+  .req::after { content: " *"; color: #e11; }
+  button { margin-top: 1.1rem; width: 100%; padding: .8rem; border: 0; border-radius: .5rem;
+    background: #2563eb; color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; }
+  #msg { margin-top: 1rem; padding: .8rem; border-radius: .5rem; display: none; font-size: .9rem; }
+  #msg.ok { background: rgba(22,163,74,.15); border: 1px solid rgba(22,163,74,.5); display: block; }
+  #msg.err { background: rgba(220,38,38,.15); border: 1px solid rgba(220,38,38,.5); display: block; }
+  .counts { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0; }
+  .chip { padding: .3rem .6rem; border-radius: 1rem; border: 1px solid rgba(128,128,128,.4);
+    font-size: .85rem; }
+  .hint { font-size: .8rem; opacity: .65; margin-top: .2rem; }
+</style></head><body>
+<h1>hd-prospector · Alta de prospectos</h1>
+<p class="sub">Registra entidades de los cuatro ecosistemas con su discurso corporativo (Thick Data). No interpreta: solo almacena.</p>
+
+<div class="counts" id="counts"></div>
+
+<label class="req">Token de ingesta</label>
+<input id="token" type="password" placeholder="HD_INGEST_TOKEN" autocomplete="off">
+<div class="hint">Se guarda solo en este dispositivo (localStorage). Es el valor que pusiste en Vercel.</div>
+
+<label class="req">Nombre</label>
+<input id="nombre" placeholder="p. ej. Kaszek">
+
+<label class="req">Categoría (ecosistema)</label>
+<select id="categoria">
+  <option value="VC">VC — fondo / venture capital</option>
+  <option value="Startup">Startup</option>
+  <option value="Incubadora">Incubadora / Aceleradora</option>
+  <option value="Corporativo">Corporativo</option>
+</select>
+
+<label>Discurso corporativo (Thick Data)</label>
+<textarea id="discurso" placeholder="Tesis de inversión, promesa de valor, programa, comunicado…"></textarea>
+
+<label>Tipo de discurso</label>
+<input id="tipo_discurso" placeholder="tesis_inversion | promesa_valor | programa | comunicado…">
+
+<label>URL / perfil de origen</label>
+<input id="url_perfil" placeholder="https://…">
+
+<label>Fuente del discurso</label>
+<input id="fuente_discurso" placeholder="sitio_oficial, linkedin, prensa…">
+
+<button id="enviar">Guardar prospecto</button>
+<div id="msg"></div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  $("token").value = localStorage.getItem("hd_ingest_token") || "";
+
+  async function refrescarConteo() {
+    try {
+      const r = await fetch("/prospectos/categorias");
+      const d = await r.json();
+      $("counts").innerHTML = Object.entries(d.categorias)
+        .map(([k, v]) => `<span class="chip">${k}: <b>${v}</b></span>`).join("");
+    } catch (e) {}
+  }
+  refrescarConteo();
+
+  $("enviar").addEventListener("click", async () => {
+    const msg = $("msg");
+    const token = $("token").value.trim();
+    localStorage.setItem("hd_ingest_token", token);
+    const body = {
+      nombre: $("nombre").value.trim(),
+      categoria: $("categoria").value,
+      discurso_corporativo: $("discurso").value.trim() || null,
+      tipo_discurso: $("tipo_discurso").value.trim() || null,
+      url_perfil: $("url_perfil").value.trim() || null,
+      fuente_discurso: $("fuente_discurso").value.trim() || null,
+    };
+    if (!token) { msg.className = "err"; msg.textContent = "Falta el token de ingesta."; return; }
+    if (!body.nombre) { msg.className = "err"; msg.textContent = "Falta el nombre."; return; }
+    $("enviar").disabled = true;
+    try {
+      const r = await fetch("/prospectos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Ingest-Token": token },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (r.ok) {
+        msg.className = "ok";
+        msg.textContent = `✓ ${body.nombre} [${body.categoria}] — ${d.accion}.`;
+        $("nombre").value = ""; $("discurso").value = ""; $("tipo_discurso").value = "";
+        $("url_perfil").value = ""; $("fuente_discurso").value = "";
+        refrescarConteo();
+      } else {
+        msg.className = "err";
+        msg.textContent = "Error: " + (d.detail || r.status);
+      }
+    } catch (e) {
+      msg.className = "err"; msg.textContent = "Error de red: " + e;
+    } finally {
+      $("enviar").disabled = false;
+    }
+  });
+</script>
+</body></html>"""
 
 
 @app.get("/stats")

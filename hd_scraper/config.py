@@ -75,6 +75,10 @@ class Settings:
     # Umbral de salud: fallos consecutivos que disparan alerta.
     health_alert_threshold: int = _int("HD_HEALTH_ALERT_THRESHOLD", 2)
 
+    # Token para la intake de prospectos (POST /prospectos y /admin). Si está
+    # vacío, la escritura queda DESHABILITADA (la API sigue siendo solo lectura).
+    ingest_token: str = os.getenv("HD_INGEST_TOKEN", "")
+
     # User-Agent identificable para las fuentes.
     user_agent: str = os.getenv(
         "HD_USER_AGENT",

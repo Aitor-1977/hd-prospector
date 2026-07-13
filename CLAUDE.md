@@ -50,6 +50,14 @@ URLs/perfiles: el motor lo ALMACENA, no lo interpreta. Escritura vía
 `hd_scraper/prospectos.py:upsert_prospecto` (UPSERT por `hash_dedup`, enriquece
 sin duplicar; inválidos → `rechazos`). Validación: `validate_prospecto`.
 
+Intake del operador (única escritura vía API; la evidencia NUNCA se escribe por
+API): `POST /prospectos` y `/prospectos/bulk` con cabecera `X-Ingest-Token` ==
+`HD_INGEST_TOKEN` (sin token → 503). `GET /admin` sirve un formulario web.
+
+Base: SQLite (dev/tests) o PostgreSQL (producción), según la URL. El driver
+(`db/database.py`) traduce marcadores y elige el esquema; `scripts/migrate.py`
+crea el esquema. En Vercel se auto-detecta `DATABASE_URL`/`POSTGRES_URL`.
+
 ## Arquitectura
 
 - **Conectores** (`hd_scraper/connectors/`): clase base `Connector` con

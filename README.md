@@ -98,8 +98,20 @@ puntúa. La categoría la declara el operador al alta (estructural), no se infie
 del texto. La escritura es UPSERT por `hash_dedup` (enriquece sin duplicar);
 los inválidos van a `rechazos`.
 
-Endpoints (solo lectura): `GET /prospectos` (filtros `categoria`, `q`,
+Endpoints de lectura (públicos): `GET /prospectos` (filtros `categoria`, `q`,
 `con_discurso`), `GET /prospectos/categorias`, `GET /prospectos/{id}`.
+
+### Alta de prospectos (intake del operador)
+
+La evidencia nunca se escribe por la API (solo el pipeline). Los **prospectos**
+sí tienen una intake autenticada del operador:
+
+- `POST /prospectos` y `POST /prospectos/bulk` — requieren la cabecera
+  `X-Ingest-Token` igual a `HD_INGEST_TOKEN`. Sin ese token configurado, la
+  escritura está **deshabilitada** (503). Reusan `upsert_prospecto`.
+- `GET /admin` — formulario web autocontenido (móvil) para dar de alta
+  prospectos sin terminal: pega el token una vez y captura nombre, categoría y
+  discurso corporativo.
 
 ## Base de datos
 
