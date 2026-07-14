@@ -498,6 +498,7 @@ def _correr_query(db, query, connectors) -> list[dict]:
             "connector": cname, "consulta": query.empresa, "vistos": res.vistos,
             "escritos": res.escritos, "no_fechados": res.no_fechados,
             "duplicados": res.duplicados, "rechazados": res.rechazados,
+            "filtrados": res.filtrados,  # descartados por el filtro de relevancia
             "errores": len(res.errores),
         })
     return salida
@@ -967,6 +968,20 @@ def stats() -> dict:
         "prospectos": db.fetch_one("SELECT COUNT(*) AS n FROM prospectos")["n"],
         "prospectos_por_categoria": prospectos_por_categoria()["categorias"],
         "rechazos": db.fetch_one("SELECT COUNT(*) AS n FROM rechazos")["n"],
+        # Desglose de descartes por motivo (dedup/contrato/relevancia): observabilidad
+        # para la validación. Se calcula sobre la tabla `rechazos` ya existente.
+        "rechazos_por_motivo": {
+            r["motivo"]: r["n"]
+            for r in db.fetch_all(
+                "SELECT motivo, COUNT(*) AS n FROM rechazos GROUP BY motivo ORDER BY n DESC")
+        },
+        # Distribución de calidad_captura sobre evidencia consumible.
+        "calidad_captura": {
+            (r["calidad_captura"] or "sin_calidad"): r["n"]
+            for r in db.fetch_all(
+                "SELECT calidad_captura, COUNT(*) AS n FROM evidencias "
+                "WHERE estado = ? GROUP BY calidad_captura", (ESTADO_OK,))
+        },
         "fuentes_en_alerta": db.fetch_one(
             "SELECT COUNT(*) AS n FROM salud_fuentes WHERE alerta = 1")["n"],
     }

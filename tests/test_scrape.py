@@ -47,6 +47,20 @@ def test_scrape_escribe_evidencias(cli, db):
     assert db.fetch_one("SELECT COUNT(*) n FROM evidencias")["n"] == 2
 
 
+def test_scrape_reporta_filtrados(cli):
+    r = cli.post("/scrape", json={"empresa": "Nubank", "tipo_evento": "ronda",
+                                  "connectors": ["google_news"]}, headers=H)
+    assert "filtrados" in r.json()["resultados"][0]
+
+
+def test_stats_expone_desglose_para_validacion(cli):
+    cli.post("/scrape", json={"empresa": "Nubank", "tipo_evento": "ronda",
+                              "connectors": ["google_news"]}, headers=H)
+    d = cli.get("/stats").json()
+    assert "rechazos_por_motivo" in d and isinstance(d["rechazos_por_motivo"], dict)
+    assert "calidad_captura" in d and isinstance(d["calidad_captura"], dict)
+
+
 def test_scrape_rechaza_conector_no_apto(cli):
     # job_boards no está en la lista de scraping bajo demanda.
     r = cli.post("/scrape", json={"empresa": "Nubank", "connectors": ["job_boards"]}, headers=H)
