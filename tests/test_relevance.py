@@ -73,6 +73,32 @@ def test_relevancia_descarta_sin_evento():
     assert not ok and motivo == MOTIVO_SIN_EVENTO
 
 
+def test_relevancia_descarta_espana_y_no_empresa():
+    from hd_scraper.relevance import MOTIVO_NO_EMPRESA, MOTIVO_NO_LATAM
+    # Geografía fuera de LATAM (España / Girona / Castilla).
+    ok, m = evaluar_relevancia(
+        "El Gobierno de Castilla-La Mancha impulsa la innovación", ["expansion"], True)
+    assert not ok and m in (MOTIVO_NO_LATAM, MOTIVO_NO_EMPRESA)
+    # Premios (no es empresa).
+    ok2, m2 = evaluar_relevancia(
+        "Los Premios Princesa de Girona reconocen seis proyectos", ["lanzamiento"], True)
+    assert not ok2
+    # Reporte de mercado "…AÑO:".
+    ok3, m3 = evaluar_relevancia(
+        "Venture Capital LATAM 2025: la inversión cae 30%", ["ronda_inversion"], True)
+    assert not ok3 and m3 == MOTIVO_NO_EMPRESA
+    # Análisis "de cada 10" sin empresa concreta.
+    ok4, _ = evaluar_relevancia(
+        "Siete de cada 10 startups no están listas para escalar", ["expansion"], True)
+    assert not ok4
+
+
+def test_relevancia_conserva_empresa_mexicana_real():
+    ok, motivo = evaluar_relevancia(
+        "Konfío levanta una ronda serie C en México", ["ronda_inversion"], True)
+    assert ok and motivo == ""
+
+
 # ── calidad de captura (informativa) ─────────────────────────────────────────
 
 def test_calidad_alta_media_baja():

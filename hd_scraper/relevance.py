@@ -144,12 +144,50 @@ def es_opinion(titulo: str) -> bool:
     return bool(_RE_LISTICULO.search(t))
 
 
+# ── Geografía y "no es empresa" (deterministas) ──────────────────────────────
+#
+# Términos NO-LATAM (país, región, ciudad, gentilicio). El laboratorio opera
+# México/LATAM; una nota de España/EE.UU./etc. se descarta.
+NO_LATAM: tuple[str, ...] = (
+    "espana", "espanola", "espanol", "madrid", "barcelona", "girona", "castilla",
+    "cataluna", "andalucia", "sevilla", "galicia", "gallego", "vasco", "catalan",
+    "estados unidos", "ee.uu", "eeuu", "reino unido", "inglaterra", "francia",
+    "frances", "alemania", "aleman", "italia", "portugal", "china", "india",
+    "japon", "canada",
+)
+
+# Términos que indican que NO es una empresa prospecto: gobierno, premios,
+# academia, gremios, y REPORTES/análisis de mercado (no una compañía concreta).
+NO_EMPRESA: tuple[str, ...] = (
+    "gobierno", "ministerio", "ministro", "ayuntamiento", "diputacion",
+    "generalitat", "xunta", "alcaldia", "senado", "congreso",
+    "premios", "premio", "galardon",
+    "universidad", "facultad", "camara de", "colegio de",
+    "asociacion", "federacion", "fundacion", "sindicato",
+    "panorama de", "panorama del", "outlook", "perspectivas de",
+    "perspectivas para", "estado de la", "el estado de", "balance de",
+    "resumen del ano", "reporte anual", "informe anual", "state of",
+    "de cada 10", "de cada diez", "siete de cada", "record en", "ranking",
+    "radiografia",
+)
+
+# Título de reporte: un tema seguido de "AÑO:" (p. ej. "Venture Capital LATAM
+# 2025:"). Señal fuerte de informe, casi nunca una empresa.
+_RE_REPORTE = re.compile(r"\b20\d\d\s*:")
+
+
+def _contiene(texto: str, terminos: tuple[str, ...]) -> bool:
+    return any(t in texto for t in terminos)
+
+
 # ── Filtro de relevancia mínimo ──────────────────────────────────────────────
 #
 # Motivos de descarte (se persisten en `rechazos`, auditables):
 MOTIVO_OPINION = "relevancia:opinion"          # opinión / tendencia / listículo
 MOTIVO_SIN_EMPRESA = "relevancia:sin_empresa"  # no menciona empresa concreta
 MOTIVO_SIN_EVENTO = "relevancia:sin_evento"    # no describe evento verificable
+MOTIVO_NO_LATAM = "relevancia:no_latam"        # geografía fuera de LATAM
+MOTIVO_NO_EMPRESA = "relevancia:no_empresa"    # gobierno/premios/academia/reporte
 
 
 def evaluar_relevancia(
@@ -159,13 +197,20 @@ def evaluar_relevancia(
 
     Reglas (todas deben cumplirse para CONSERVAR):
       R1  No es opinión/tendencia/listículo (marcadores léxicos).
-      R2  Hay una empresa identificable (nombre propio o consulta dirigida).
-      R3  Hay un evento verificable (al menos una señal genérica en ``keywords``).
+      R2  No es geografía fuera de LATAM (España, EE.UU., …).
+      R3  No es "no-empresa" (gobierno, premios, academia, reporte de mercado).
+      R4  Hay una empresa identificable (nombre propio o consulta dirigida).
+      R5  Hay un evento verificable (al menos una señal genérica en ``keywords``).
 
     Devuelve ``(relevante, motivo)``. ``motivo`` vacío si es relevante.
     """
+    t = _norm(titulo)
     if es_opinion(titulo):
         return False, MOTIVO_OPINION
+    if _contiene(t, NO_LATAM):
+        return False, MOTIVO_NO_LATAM
+    if _contiene(t, NO_EMPRESA) or _RE_REPORTE.search(t):
+        return False, MOTIVO_NO_EMPRESA
     if not empresa_identificada:
         return False, MOTIVO_SIN_EMPRESA
     if not keywords:
