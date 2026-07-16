@@ -14,6 +14,8 @@ import csv
 import hmac
 import io
 import json
+import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -536,13 +538,26 @@ def scrape(payload: ScrapeIn, x_ingest_token: Optional[str] = Header(None)) -> d
             raise HTTPException(400, f"vertical inválida: {payload.vertical}")
         # Descubrimiento: Google News sobre ecosistema + vertical (HD) + señal,
         # acotado a la zona geográfica (terminos).
-        for termino, tipo in queries_para(payload.categoria, payload.tipo_evento, payload.vertical):
+        #
+        # Presupuesto de tiempo: cada consulta es una llamada de red. En serverless
+        # la función tiene un límite corto; si nos pasamos, el navegador recibe un
+        # "Internal Server Error" en TEXTO (no JSON) y la UI truena. Por eso cortamos
+        # las consultas restantes al agotar el presupuesto y devolvemos lo logrado
+        # con parcial=True (siempre JSON válido).
+        presupuesto_s = float(os.getenv("HD_SCRAPE_BUDGET_S", "7"))
+        t0 = time.monotonic()
+        parcial = False
+        consultas = queries_para(payload.categoria, payload.tipo_evento, payload.vertical)
+        for i, (termino, tipo) in enumerate(consultas):
+            if i > 0 and time.monotonic() - t0 > presupuesto_s:
+                parcial = True
+                break
             query = QuerySpec(empresa=termino, tipo_evento=tipo, terminos=zona,
                               categoria=payload.categoria, exact=False)
             resultados += _correr_query(db, query, ["google_news"])
         modo = {"modo": "categoria", "categoria": payload.categoria,
                 "tipo_evento": payload.tipo_evento, "vertical": payload.vertical,
-                "region": payload.region}
+                "region": payload.region, "parcial": parcial}
     elif payload.empresa and payload.empresa.strip():
         if payload.tipo_evento not in TIPOS_EVENTO:
             raise HTTPException(400, f"tipo_evento inválido: {payload.tipo_evento}")
@@ -830,6 +845,21 @@ _ADMIN_HTML = """<!doctype html>
   $("token").value = localStorage.getItem("hd_ingest_token") || "";
   const tok = () => { const t = $("token").value.trim(); localStorage.setItem("hd_ingest_token", t); return t; };
 
+  // Lee la respuesta con tolerancia: si el servidor devolvió TEXTO (p. ej. un
+  // "Internal Server Error" por timeout del serverless), no revienta con
+  // "SyntaxError: is not valid JSON"; devuelve un mensaje entendible.
+  async function leerJson(r) {
+    const cuerpo = await r.text();
+    try { return { ok: r.ok, status: r.status, data: JSON.parse(cuerpo) }; }
+    catch (e) {
+      const esTimeout = /timeout|timed out|internal server error|gateway|504|FUNCTION_INVOCATION/i.test(cuerpo);
+      const msg = esTimeout
+        ? "la búsqueda tardó demasiado y el servidor la cortó. Intenta de nuevo, elige un solo país (zona) o una vertical más específica."
+        : ("respuesta inesperada del servidor (" + r.status + ").");
+      return { ok: false, status: r.status, data: null, error: msg };
+    }
+  }
+
   async function refrescarConteo() {
     try {
       const d = await (await fetch("/prospectos/categorias")).json();
@@ -849,13 +879,15 @@ _ADMIN_HTML = """<!doctype html>
       const r = await fetch("/scrape", { method: "POST",
         headers: { "Content-Type": "application/json", "X-Ingest-Token": token },
         body: JSON.stringify(body) });
-      const d = await r.json();
-      if (!r.ok) { m.className = "msg err"; m.textContent = "Error: " + (d.detail || r.status); return; }
+      const res = await leerJson(r);
+      if (!res.ok) { m.className = "msg err"; m.textContent = "Error: " + (res.error || (res.data && res.data.detail) || r.status); return; }
+      const d = res.data;
       const vistas = (d.resultados||[]).reduce((a,x)=>a+(x.vistos||0),0);
       const dup = (d.resultados||[]).reduce((a,x)=>a+(x.duplicados||0),0);
       const err = (d.resultados||[]).reduce((a,x)=>a+(x.errores||0)+(x.error?1:0),0);
+      const nota = d.parcial ? " (parcial: se agotó el tiempo; toca de nuevo para seguir)" : "";
       m.className = "msg ok";
-      m.textContent = `✓ ${d.total_escritos} nuevas · ${vistas} vistas · ${dup} repetidas · ${err} errores — ${etiqueta}.`;
+      m.textContent = `✓ ${d.total_escritos} nuevas · ${vistas} vistas · ${dup} repetidas · ${err} errores — ${etiqueta}${nota}.`;
       cargar();
     } catch (e) { m.className = "msg err"; m.textContent = "Error de red: " + e; }
     finally { document.querySelectorAll("button").forEach(b => b.disabled = false); }
@@ -910,8 +942,9 @@ _ADMIN_HTML = """<!doctype html>
       const r = await fetch("/enrich", { method: "POST",
         headers: { "Content-Type": "application/json", "X-Ingest-Token": token },
         body: JSON.stringify({ nombre }) });
-      const d = await r.json();
-      if (!r.ok) { m.className = "msg err"; m.textContent = "Error: " + (d.detail || r.status); return; }
+      const res = await leerJson(r);
+      if (!res.ok) { m.className = "msg err"; m.textContent = "Error: " + (res.error || (res.data && res.data.detail) || r.status); return; }
+      const d = res.data;
       if (d.sitio_web) { $("sitio_web").value = d.sitio_web; if (!$("url_perfil").value) $("url_perfil").value = d.sitio_web; }
       if (d.linkedin) $("linkedin").value = d.linkedin;
       if (d.vertical_sugerida && !$("vertical").value.trim()) $("vertical").value = d.vertical_sugerida;

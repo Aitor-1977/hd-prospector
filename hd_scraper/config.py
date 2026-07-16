@@ -70,10 +70,15 @@ class Settings:
     schedule_hours: int = _int("HD_SCHEDULE_HOURS", 12)
 
     # Gobernanza de rate limiting / backoff por fuente.
-    request_timeout_s: float = float(os.getenv("HD_REQUEST_TIMEOUT_S", "20"))
-    max_retries: int = _int("HD_MAX_RETRIES", 4)
-    backoff_base_s: float = float(os.getenv("HD_BACKOFF_BASE_S", "2"))
-    min_interval_s: float = float(os.getenv("HD_MIN_INTERVAL_S", "1.5"))
+    # Valores por DEFECTO pensados para entorno serverless (Vercel): una función
+    # tiene un límite de tiempo corto, así que una sola llamada lenta con 4
+    # reintentos y backoff 2/4/8/16 (=30 s) mata la función y el navegador recibe
+    # un "Internal Server Error" en texto (no JSON). Fallar rápido es preferible;
+    # se puede subir por entorno (HD_MAX_RETRIES, etc.) en contextos batch.
+    request_timeout_s: float = float(os.getenv("HD_REQUEST_TIMEOUT_S", "8"))
+    max_retries: int = _int("HD_MAX_RETRIES", 1)
+    backoff_base_s: float = float(os.getenv("HD_BACKOFF_BASE_S", "0.5"))
+    min_interval_s: float = float(os.getenv("HD_MIN_INTERVAL_S", "0.5"))
 
     # Umbral de salud: fallos consecutivos que disparan alerta.
     health_alert_threshold: int = _int("HD_HEALTH_ALERT_THRESHOLD", 2)

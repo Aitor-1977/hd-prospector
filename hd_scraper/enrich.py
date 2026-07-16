@@ -17,6 +17,8 @@ el cuerpo (str) o lanza excepción si falla.
 from __future__ import annotations
 
 import logging
+import os
+import time
 import unicodedata
 from typing import Callable, Optional
 from urllib.parse import parse_qs, quote_plus, urlsplit
@@ -184,8 +186,18 @@ def resolver_sitio(nombre: str, http_get: Callable[[str], str]) -> tuple[Optiona
     notas: list[str] = []
     probable: Optional[str] = None
 
+    # Presupuesto de tiempo: en serverless probar ~18 dominios en serie puede
+    # agotar el límite de la función. Acotamos a los candidatos más probables y a
+    # un presupuesto de reloj; si se agota, pasamos a la búsqueda (más certera).
+    t0 = time.monotonic()
+    presupuesto = float(os.getenv("HD_ENRICH_BUDGET_S", "6"))
+    max_candidatos = int(os.getenv("HD_ENRICH_MAX_CANDIDATOS", "8"))
+
     # 1) Adivinación de dominio + verificación.
-    for cand in dominios_candidatos(nombre):
+    for cand in dominios_candidatos(nombre)[:max_candidatos]:
+        if time.monotonic() - t0 > presupuesto:
+            notas.append("adivinación de dominio acotada por tiempo")
+            break
         try:
             html = http_get(cand)
         except Exception:

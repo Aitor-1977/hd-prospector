@@ -103,6 +103,22 @@ def test_scrape_categoria_tipo_invalido_400(cli):
     assert r.status_code == 400
 
 
+def test_scrape_categoria_incluye_flag_parcial(cli):
+    # El descubrimiento por ecosistema siempre reporta si quedó incompleto por
+    # presupuesto de tiempo (clave 'parcial'), para que la UI lo muestre.
+    r = cli.post("/scrape", json={"categoria": "Startup", "tipo_evento": "queja"}, headers=H)
+    assert r.status_code == 200 and "parcial" in r.json()
+    assert r.json()["parcial"] is False  # con el fixture (instantáneo) no se agota
+
+
+def test_scrape_presupuesto_cero_corta_y_marca_parcial(cli, monkeypatch):
+    # Con presupuesto 0 y varias consultas (queja=3), se corta tras la primera y
+    # marca parcial=True — sin lanzar 500. Blindaje contra timeouts en serverless.
+    monkeypatch.setenv("HD_SCRAPE_BUDGET_S", "0")
+    r = cli.post("/scrape", json={"categoria": "Startup", "tipo_evento": "queja"}, headers=H)
+    assert r.status_code == 200 and r.json()["parcial"] is True
+
+
 def test_scrape_region_por_defecto_latam(cli):
     r = cli.post("/scrape", json={"categoria": "VC"}, headers=H)
     assert r.status_code == 200 and r.json()["region"] == "LATAM"
