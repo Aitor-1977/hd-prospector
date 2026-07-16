@@ -21,23 +21,29 @@ from __future__ import annotations
 import os
 
 # Bases por ecosistema, orientadas al prospecto ideal de HD.
+#
+# RECALL (mejora de la búsqueda): Google News combina las palabras sueltas con
+# AND, así que una base de varias palabras ("corporativo innovación abierta")
+# exige que TODAS aparezcan y casi no devuelve nada. Por eso las bases usan
+# grupos OR entre sinónimos/variantes: piden CUALQUIERA, no todas. Sigue siendo
+# descubrimiento estructural (frases declaradas), no interpretación.
 CATEGORIA_BASE_DEFAULT: dict[str, list[str]] = {
-    "VC": ["venture capital", "corporate venture capital",
-           "fondo de inversión due diligence portafolio"],
-    "Startup": ["startup"],  # la especificidad la aporta la vertical + señal
-    "Incubadora": ["aceleradora de startups", "incubadora de startups"],
-    "Corporativo": ["corporativo innovación abierta", "corporativo transformación digital"],
+    "VC": ['("venture capital" OR "corporate venture capital" OR "fondo de inversión" OR "capital de riesgo")'],
+    "Startup": ["(startup OR startups OR emprendimiento)"],
+    "Incubadora": ["(aceleradora OR incubadora OR \"venture builder\")"],
+    "Corporativo": ['(corporativo OR corporación OR "innovación abierta" OR "transformación digital")'],
 }
 
-# Verticales dependientes de contexto que le interesan a HD.
+# Verticales dependientes de contexto que le interesan a HD. También en grupo OR:
+# basta que aparezca cualquiera de los sinónimos de la vertical.
 VERTICALES_HD: dict[str, str] = {
     "todas": "",
-    "fintech": "fintech",
-    "edtech": "edtech educación",
-    "healthtech": "healthtech salud digital",
-    "salud mental": '"salud mental"',
-    "logística agrícola": "logística agrícola agtech",
-    "identidad": "identidad digital",
+    "fintech": "(fintech OR pagos OR \"crédito digital\")",
+    "edtech": "(edtech OR educación)",
+    "healthtech": "(healthtech OR \"salud digital\" OR telemedicina)",
+    "salud mental": '("salud mental" OR bienestar OR terapia)',
+    "logística agrícola": '(agtech OR "logística agrícola" OR agro)',
+    "identidad": '("identidad digital" OR verificación OR KYC)',
 }
 
 # Señal (tipo_evento del contrato) → VARIANTES de consulta. Cada variante es una
@@ -51,40 +57,41 @@ VERTICALES_HD: dict[str, str] = {
 # deja de ser un único término y pasa a cubrir explícitamente pérdida de
 # clientes, despidos, conflictos regulatorios, caídas de crecimiento,
 # cancelación de servicios, demandas, reestructuración y crisis operativas.
+# Cada VARIANTE es ahora un grupo OR (frases entre comillas unidas con OR), no
+# una bolsa de palabras sueltas AND. Antes, "pérdida de clientes fuga de
+# usuarios" exigía que las 7 palabras aparecieran juntas -> casi 0 resultados.
+# Ahora pide CUALQUIERA de las frases -> muchos más titulares reales, que luego
+# el filtro de relevancia y la zona depuran. El vocabulario del contrato (las
+# claves del dict) NO cambia.
 TIPO_KEYWORDS: dict[str, list[str]] = {
     "ronda": [
-        "ronda de inversión",
-        "levanta capital serie A",
-        "recauda financiamiento",
+        '("ronda de inversión" OR "levanta capital" OR "serie A" OR "serie B" '
+        'OR recauda OR financiamiento OR "capital semilla")',
     ],
     "contratacion": [
-        "contratación masiva de personal",
-        "nuevo ejecutivo head of",
-        "plan de contratación empleos",
+        '("contratación masiva" OR "nuevo ejecutivo" OR "head of" OR "director de" '
+        'OR "nombra a" OR "plan de contratación")',
     ],
     "despido": [
-        "despidos masivos",
-        "reestructuración recorte de personal",
-        "cierre de operaciones",
+        '("despidos masivos" OR "recorte de personal" OR reestructuración '
+        'OR "cierre de operaciones" OR "ajuste de plantilla")',
     ],
     "lanzamiento": [
-        "lanzamiento de producto",
-        "nueva plataforma estrena",
+        '("lanzamiento de producto" OR "nueva plataforma" OR estrena '
+        'OR "lanza" OR relanzamiento)',
     ],
-    # Bucket de fricción — ampliado (mejora #4). Cada línea es una consulta.
+    # Bucket de fricción — grupos OR amplios que cubren pérdida de clientes,
+    # cancelaciones, demandas/regulación, caída de crecimiento y reestructuración.
     "queja": [
-        "pérdida de clientes fuga de usuarios",
-        "quejas churn baja retención",
-        "cancelación de servicio cancelaciones",
-        "demanda colectiva denuncia",
-        "conflicto regulatorio multa sanción",
-        "caída de crecimiento desaceleración",
-        "reestructuración crisis operativa",
-        "despidos cierre de operaciones",
+        '("pérdida de clientes" OR "fuga de usuarios" OR churn OR "baja retención" '
+        'OR cancelaciones OR "cancelación de servicio")',
+        '("demanda colectiva" OR denuncia OR "conflicto regulatorio" OR multa '
+        'OR sanción)',
+        '("caída de crecimiento" OR desaceleración OR reestructuración '
+        'OR "crisis operativa" OR despidos OR "cierre de operaciones")',
     ],
     "cambio_sitio": [
-        "rediseño de marca pivote",
-        "nuevo modelo de negocio relanzamiento",
+        '("rediseño de marca" OR pivote OR "nuevo modelo de negocio" OR relanzamiento)',
     ],
 }
 
