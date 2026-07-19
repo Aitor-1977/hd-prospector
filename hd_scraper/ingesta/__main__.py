@@ -1,7 +1,8 @@
 """CLI de los conectores de ingesta Capa 0.
 
 Ejemplos:
-    python -m hd_scraper.ingesta apify --dataset <DATASET_ID>
+    python -m hd_scraper.ingesta noticias --query "fintech México ronda"
+    python -m hd_scraper.ingesta noticias --feed https://un-medio.com/rss
     python -m hd_scraper.ingesta youtube --url <VIDEO_URL> --org "Acme" --lang es
 """
 from __future__ import annotations
@@ -11,7 +12,7 @@ import json
 import logging
 import sys
 
-from . import apify, youtube
+from . import noticias, youtube
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,12 +23,14 @@ logging.basicConfig(
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         prog="hd_scraper.ingesta",
-        description="Conectores de ingesta (Apify / yt-dlp) → /webhook/ingesta",
+        description="Conectores de ingesta (noticias RSS gratis / yt-dlp) → /webhook/ingesta",
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    a = sub.add_parser("apify", help="Dataset de Apify (LinkedIn/Jobs/News)")
-    a.add_argument("--dataset", required=True, help="ID del dataset de Apify")
+    n = sub.add_parser("noticias", help="Noticias por RSS gratis (Google News u otro feed)")
+    n.add_argument("--query", default=None, help="Búsqueda en Google News RSS")
+    n.add_argument("--feed", default=None, help="URL de un feed RSS/Atom directo")
+    n.add_argument("--limite", type=int, default=25, help="máximo de notas a enviar")
 
     y = sub.add_parser("youtube", help="Transcripción de un video de YouTube")
     y.add_argument("--url", required=True, help="URL del video")
@@ -36,8 +39,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = p.parse_args(argv)
     try:
-        if args.cmd == "apify":
-            res = apify.correr(args.dataset)
+        if args.cmd == "noticias":
+            res = noticias.correr(query=args.query, feed_url=args.feed, limite=args.limite)
         else:
             res = youtube.correr(args.url, args.org, lang=args.lang)
     except Exception as exc:

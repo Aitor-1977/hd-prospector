@@ -1065,7 +1065,7 @@ def directorio_endpoint(payload: DirectorioIn,
 # --- Capa 0: motor de reglas determinista sobre texto (ingesta) ------------
 #
 # Punto de entrada para señales de texto/transcripción (los conectores de
-# Apify/yt-dlp postearán aquí). Evalúa con RuleEngine, puntúa y persiste. No
+# noticias RSS / yt-dlp postean aquí). Evalúa con RuleEngine, puntúa y persiste. No
 # interpreta cualitativamente (eso es Motor B): solo registra matches auditables.
 
 _rule_engine = RuleEngine()

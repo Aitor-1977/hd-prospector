@@ -2,7 +2,7 @@
 
 Todo con la red inyectada; ninguna prueba llama a Apify, yt-dlp ni al webhook real.
 """
-from hd_scraper.ingesta import apify, webhook, youtube
+from hd_scraper.ingesta import noticias, webhook, youtube
 
 _NOOP = lambda s: None  # noqa: E731
 
@@ -45,36 +45,66 @@ def test_webhook_incluye_token_en_headers():
     assert capturado.get("X-Ingest-Token") == "secreto"
 
 
-# ── Apify: mapeo de item → payload ───────────────────────────────────────────
+# ── Noticias (RSS gratis): mapeo de entrada → payload ────────────────────────
 
-def test_apify_item_a_payload_varias_formas():
-    assert apify.item_a_payload({"text": "Buscamos head of growth", "url": "u",
-                                 "companyName": "Acme"}) == {
-        "texto": "Buscamos head of growth", "url": "u", "org_name": "Acme"}
-    # Sin texto -> None (no se envía).
-    assert apify.item_a_payload({"url": "u"}) is None
+RSS = """<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <item>
+    <title>Kavak recauda una ronda Serie E - Bloomberg Línea</title>
+    <link>https://news.example/kavak</link>
+    <description>&lt;p&gt;La fintech de autos &lt;b&gt;levanta capital&lt;/b&gt;.&lt;/p&gt;</description>
+    <source url="https://bloomberglinea.com">Bloomberg Línea</source>
+  </item>
+  <item>
+    <title></title>
+    <link>https://news.example/vacio</link>
+  </item>
+  <item>
+    <title>Clip reestructura su equipo comercial - El Financiero</title>
+    <link>https://news.example/clip</link>
+    <source url="https://elfinanciero.com">El Financiero</source>
+  </item>
+</channel></rss>"""
 
 
-def test_apify_correr_postea_cada_item():
-    items = [
-        {"description": "vacante senior de growth", "url": "u1", "company": "A"},
-        {"title": "", "url": "u2"},                      # sin texto -> se omite
-        {"text": "down round", "link": "u3", "source": "News"},
-    ]
+def test_noticias_parse_feed_mapea_y_limpia_html():
+    payloads = noticias.parse_feed(RSS)
+    # La entrada sin título se omite; quedan 2.
+    assert len(payloads) == 2
+    p0 = payloads[0]
+    assert p0["url"] == "https://news.example/kavak"
+    assert p0["org_name"] == "Bloomberg Línea"
+    assert "levanta capital" in p0["texto"] and "<b>" not in p0["texto"]
+
+
+def test_noticias_correr_por_query_postea_cada_nota():
     enviados = []
-    res = apify.correr("DS", token="tok",
-                       http_get_json=lambda url: items,
-                       enviar_fn=lambda p: (enviados.append(p) or {"senales_detectadas": 1}))
-    assert res["items"] == 3 and res["enviados"] == 2 and res["senales_detectadas"] == 2
-    assert {e["url"] for e in enviados} == {"u1", "u3"}
+    capturado = {}
+
+    def get(url):
+        capturado["url"] = url
+        return RSS
+
+    res = noticias.correr(query="fintech México ronda",
+                          http_get=get,
+                          enviar_fn=lambda p: (enviados.append(p) or {"senales_detectadas": 1}))
+    assert "news.google.com/rss/search" in capturado["url"]   # Google News RSS (gratis)
+    assert res["items"] == 2 and res["enviados"] == 2 and res["senales_detectadas"] == 2
 
 
-def test_apify_sin_token_lanza():
+def test_noticias_correr_por_feed_directo():
+    res = noticias.correr(feed_url="https://un-medio.com/rss",
+                          http_get=lambda url: RSS,
+                          enviar_fn=lambda p: {"senales_detectadas": 0})
+    assert res["items"] == 2
+
+
+def test_noticias_sin_query_ni_feed_lanza():
     try:
-        apify.correr("DS", token="")
+        noticias.correr(http_get=lambda url: RSS)
         assert False
-    except RuntimeError as e:
-        assert "APIFY_TOKEN" in str(e)
+    except ValueError:
+        pass
 
 
 # ── yt-dlp: parseo VTT, agrupado y envío con timestamp ───────────────────────

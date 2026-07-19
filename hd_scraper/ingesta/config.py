@@ -34,9 +34,6 @@ WEBHOOK_URL: str = os.getenv("HD_WEBHOOK_URL", "http://localhost:8000/webhook/in
 # Token de escritura del webhook (mismo HD_INGEST_TOKEN del backend).
 INGEST_TOKEN: str = os.getenv("HD_INGEST_TOKEN", "")
 
-# Credenciales de Apify.
-APIFY_TOKEN: str = os.getenv("APIFY_TOKEN", "")
-
 # Resiliencia (reintentos + backoff exponencial).
 MAX_RETRIES: int = _i("HD_INGESTA_MAX_RETRIES", 4)
 BACKOFF_BASE_S: float = _f("HD_INGESTA_BACKOFF_S", 1.0)
