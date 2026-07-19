@@ -23,6 +23,7 @@ from .db.models import (
     EvidenceRecord,
     QuerySpec,
     ahora_iso,
+    calcular_hash_dedup,
     clave_contenido,
     hash_contenido,
 )
@@ -154,7 +155,15 @@ def run_connector(db: Database, connector: Connector, query: QuerySpec) -> RunRe
             titulo = record.cita_textual
             # Empresa identificable: en consulta dirigida (exact) la empresa la
             # declara el operador; en descubrimiento se detecta un nombre propio.
-            empresa_ok = bool(query.exact) or bool(detectar_empresa(titulo))
+            detectada = detectar_empresa(titulo)
+            empresa_ok = bool(query.exact) or bool(detectada)
+            # En descubrimiento por ecosistema el "empresa" de la consulta es un
+            # GRUPO TEMÁTICO (p. ej. "(startup OR ...)"), no una compañía. La
+            # organización real se DETECTA del titular; sin ella no es prospecto.
+            if not query.exact:
+                record.empresa_mencionada = detectada or ""
+                record.hash_dedup = calcular_hash_dedup(
+                    record.empresa_mencionada, record.url_fuente)
             evento_ok = bool(record.keywords)
             fuente_ok = fuente_confiable(record.nombre_medio)
 

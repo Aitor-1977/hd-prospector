@@ -35,7 +35,7 @@ from ..contacto import dominio_de, rutas_contacto
 from ..discovery import REGIONES, VERTICALES_HD, queries_para, region_clause
 from ..enrich import enriquecer, google_search_url, linkedin_search_url, sugerir_vertical
 from ..pipeline import run_connector
-from ..relevance import detectar_empresa
+from ..relevance import detectar_empresa, evaluar_relevancia
 from ..signals import detectar_keywords
 from ..prospectos import nuevo_prospecto, upsert_prospecto
 from ..validation.validator import validate_prospecto
@@ -180,6 +180,7 @@ def listar_evidencias(
     hasta: Optional[str] = Query(None, description="fecha_publicacion <= (ISO 8601)"),
     limite: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    limpio: bool = Query(False, description="Deriva la organización del titular y omite ruido/basura (para la UI)"),
 ) -> dict:
     if tipo_evento is not None and tipo_evento not in TIPOS_EVENTO:
         raise HTTPException(400, f"tipo_evento inválido: {tipo_evento}")
@@ -213,11 +214,27 @@ def listar_evidencias(
         f"ORDER BY fecha_publicacion DESC, id DESC LIMIT ? OFFSET ?",
         params + [limite, offset],
     )
+    # La organización real se DERIVA del titular (la evidencia). En datos viejos,
+    # empresa_mencionada podía ser el término de búsqueda; aquí se corrige para
+    # mostrar el sujeto correcto. Con ``limpio`` además se omite el ruido/basura
+    # que quedó en la base antes de reforzar los filtros (no altera la tabla).
+    items: list = []
+    for f in filas:
+        item = _row_a_evidencia(f)
+        titulo = item["cita_textual"]
+        org = detectar_empresa(titulo)
+        if limpio:
+            ok, _ = evaluar_relevancia(titulo, item.get("keywords") or [], bool(org),
+                                       exigir_evento=False)
+            if not org or not ok:
+                continue
+        item["organizacion"] = org or (item.get("empresa_mencionada") or "")
+        items.append(item)
     return {
         "total": total,
         "limite": limite,
         "offset": offset,
-        "items": [_row_a_evidencia(f) for f in filas],
+        "items": items,
     }
 
 
@@ -1358,14 +1375,14 @@ _ADMIN_HTML = """<!doctype html>
   // ② Listar evidencias (por empresa o por categoría)
   async function cargarEvidencias(filtro) {
     const cont = $("evidencias");
-    const qs = new URLSearchParams({ limite: "25", ...filtro });
+    const qs = new URLSearchParams({ limite: "25", limpio: "1", ...filtro });
     try {
       const d = await (await fetch("/evidencias?" + qs)).json();
       if (!d.items.length) { cont.innerHTML = '<div class="hint">Sin organizaciones detectadas todavía. Prueba otra categoría o revisa /stats.</div>'; return; }
       cont.innerHTML = d.items.map(e => {
         // Jerarquía de laboratorio: el SUJETO es la organización; la noticia es
         // solo EVIDENCIA (señal observada), no un prospecto que se "guarda".
-        const org = esc(e.empresa_mencionada) || "(organización no identificada)";
+        const org = esc(e.organizacion || e.empresa_mencionada) || "(organización no identificada)";
         const tipo = e.categoria ? esc(e.categoria) : "sin clasificar";
         const fecha = (e.fecha_publicacion || "").slice(0, 10);
         return `

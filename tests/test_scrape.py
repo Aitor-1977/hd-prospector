@@ -76,6 +76,31 @@ def test_scrape_luego_evidencias_visibles(cli):
     assert r.json()["total"] >= 1
 
 
+def test_evidencias_limpio_expone_organizacion_y_omite_ruido(cli, db):
+    # Siembra una evidencia de ruido (giganta + "abre sucursal") directamente.
+    from hd_scraper.db.models import ESTADO_OK, ahora_iso
+    db.execute(
+        """INSERT INTO evidencias
+             (cita_textual, fecha_extraccion, url_fuente, nombre_medio,
+              empresa_mencionada, tipo_evento, origen_declaracion, hash_dedup,
+              fecha_publicacion, connector, estado, categoria, keywords, confianza,
+              clave_contenido, hash_contenido, calidad_captura, creado_en)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        ("Wendy's abre su primera sucursal en Jalisco", ahora_iso(),
+         "https://x/wendys", "El Informador", "(startup OR startups)", "queja",
+         "prensa", "hruido", "2026-07-15", "google_news", ESTADO_OK, "Startup",
+         "[]", 0.5, "cc1", "hc1", "Baja", ahora_iso()),
+    )
+    # Con limpio=1 la basura no aparece.
+    limpio = cli.get("/evidencias", params={"limpio": 1}).json()["items"]
+    assert not any("Wendy" in i["cita_textual"] for i in limpio)
+    # Una evidencia real detecta su organización del titular.
+    cli.post("/scrape", json={"empresa": "Nubank", "tipo_evento": "ronda",
+                              "connectors": ["google_news"]}, headers=H)
+    items = cli.get("/evidencias", params={"limpio": 1, "empresa": "Nubank"}).json()["items"]
+    assert items and all(i.get("organizacion") for i in items)
+
+
 def test_scrape_por_categoria_etiqueta_ecosistema(cli, db):
     # Modo descubrimiento: corre las consultas temáticas del ecosistema VC.
     r = cli.post("/scrape", json={"categoria": "VC"}, headers=H)

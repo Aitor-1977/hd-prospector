@@ -99,6 +99,14 @@ def test_evidencia_lleva_calidad_captura(db):
     assert fila["calidad_captura"] in ("Alta", "Media", "Baja")
 
 
+def test_descubrimiento_guarda_la_empresa_detectada_no_el_termino(db):
+    # El término de consulta era "startup fintech"; la evidencia guardada debe
+    # tener la ORGANIZACIÓN detectada del titular ("Nubank"), no el término.
+    _run(db, termino="startup fintech")
+    fila = db.fetch_one("SELECT empresa_mencionada FROM evidencias LIMIT 1")
+    assert fila["empresa_mencionada"] == "Nubank"
+
+
 def test_calidad_en_evidencias_y_en_corpus(db, monkeypatch):
     _run(db)
     api = importlib.import_module("hd_scraper.api.app")
