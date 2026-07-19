@@ -121,3 +121,11 @@ CREATE TABLE IF NOT EXISTS raw_store (
 
 CREATE INDEX IF NOT EXISTS idx_raw_hash   ON raw_store (hash_dedup);
 CREATE INDEX IF NOT EXISTS idx_raw_expira ON raw_store (expira_en);
+
+-- Caché de respuestas del directorio de empresas (Wikidata). Evita repetir la
+-- misma consulta a la base pública; se sirve desde aquí si tiene < 7 días.
+CREATE TABLE IF NOT EXISTS directorio_cache (
+    clave       TEXT PRIMARY KEY,   -- qids|limite (la respuesta no depende de la vertical)
+    data_json   TEXT NOT NULL,      -- respuesta cruda de Wikidata (JSON)
+    creado_en   TEXT NOT NULL       -- ISO 8601
+);

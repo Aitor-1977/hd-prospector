@@ -120,3 +120,10 @@ CREATE TABLE IF NOT EXISTS raw_store (
 
 CREATE INDEX IF NOT EXISTS idx_raw_hash   ON raw_store (hash_dedup);
 CREATE INDEX IF NOT EXISTS idx_raw_expira ON raw_store (expira_en);
+
+-- Caché de respuestas del directorio de empresas (Wikidata).
+CREATE TABLE IF NOT EXISTS directorio_cache (
+    clave       TEXT PRIMARY KEY,
+    data_json   TEXT NOT NULL,
+    creado_en   TEXT NOT NULL
+);

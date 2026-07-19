@@ -973,26 +973,39 @@ def directorio_endpoint(payload: DirectorioIn,
     sitio web y descripción; se deduplica por nombre+categoría. Zona = un país.
     """
     _exigir_token(x_ingest_token)
-    if payload.region not in directorio.PAIS_QID:
-        raise HTTPException(400, f"region debe ser un país: {sorted(directorio.PAIS_QID)}")
+    qids, _es_pais = directorio._qids_de_region(payload.region)
+    if not qids:
+        raise HTTPException(400, f"region debe ser un país o '{directorio.REGION_LATAM}': "
+                                 f"{sorted(directorio.PAIS_QID)}")
     if payload.categoria not in CATEGORIAS:
         raise HTTPException(400, f"categoria inválida: {payload.categoria}")
     if payload.vertical not in VERTICALES_HD:
         raise HTTPException(400, f"vertical inválida: {payload.vertical}")
 
     limite = max(1, min(int(payload.limite or 40), 100))
+    db = get_db()
     with httpx.Client(timeout=settings.request_timeout_s,
-                      headers={"User-Agent": settings.user_agent,
+                      headers={"User-Agent": directorio.USER_AGENT,
                                "Accept": "application/sparql-results+json"},
                       follow_redirects=True) as client:
         def http_get_json(url: str) -> dict:
             r = client.get(url)
             r.raise_for_status()
             return r.json()
-        empresas = directorio.buscar_empresas(
-            payload.region, payload.vertical, http_get_json, limite)
+        res = directorio.buscar_empresas_cascada(
+            payload.region, payload.vertical, http_get_json, db=db, limite=limite)
 
-    db = get_db()
+    # Fallo de red tras el reintento: aviso claro (no se llegó a resultados).
+    if res.get("error"):
+        return {
+            "region": payload.region, "categoria": payload.categoria,
+            "vertical": payload.vertical, "fuente": "Wikidata",
+            "encontradas": 0, "nuevos": 0, "actualizados": 0, "ampliado": False,
+            "nota": ("Wikidata no respondió (falló también el reintento). "
+                     "Intenta de nuevo en un momento."),
+        }
+
+    empresas = res["empresas"]
     nuevos = actualizados = 0
     for e in empresas:
         rec = nuevo_prospecto(
@@ -1009,13 +1022,22 @@ def directorio_endpoint(payload: DirectorioIn,
         elif r.get("accion") == "actualizado":
             actualizados += 1
 
+    if not empresas:
+        nota = ("0 empresas para esa zona/vertical, incluso ampliando el filtro. "
+                "Wikidata tiene cobertura limitada de micro-startups; prueba otro país.")
+    elif res.get("ampliado"):
+        nota = f"filtro ampliado automáticamente ({res.get('nivel','')}) para traer resultados."
+    elif res.get("cache"):
+        nota = "resultados servidos desde caché (consulta reciente)."
+    else:
+        nota = ""
+
     return {
         "region": payload.region, "categoria": payload.categoria,
         "vertical": payload.vertical, "fuente": "Wikidata",
         "encontradas": len(empresas), "nuevos": nuevos, "actualizados": actualizados,
-        "nota": ("0 empresas: Wikidata no devolvió resultados para esa zona/vertical "
-                 "(o bloqueo temporal). Prueba otro país o 'Todas' las verticales.")
-                if not empresas else "",
+        "ampliado": bool(res.get("ampliado")), "nivel": res.get("nivel", ""),
+        "cache": bool(res.get("cache")), "nota": nota,
     }
 
 
@@ -1318,7 +1340,7 @@ _ADMIN_HTML = """<!doctype html>
       if (!out.ok) { m.className = "msg err"; m.textContent = "Error: " + (out.error || (out.data && out.data.detail) || r.status); return; }
       const d = out.data;
       if (d.encontradas === 0) { m.className = "msg err"; m.textContent = "⚠️ " + (d.nota || "Sin empresas para esa zona/vertical."); }
-      else { m.className = "msg ok"; m.textContent = `✓ ${d.nuevos} nuevas · ${d.actualizados} actualizadas · ${d.encontradas} de ${d.fuente} — ${cat} · ${region()}. Míralas en el Informe profundo.`; }
+      else { m.className = "msg ok"; m.textContent = `✓ ${d.nuevos} nuevas · ${d.actualizados} actualizadas · ${d.encontradas} de ${d.fuente} — ${cat} · ${region()}.` + (d.nota ? " " + d.nota : "") + " Míralas en el Informe profundo."; }
       refrescarConteo();
     } catch (e) { m.className = "msg err"; m.textContent = "Error de red: " + e; }
     finally { document.querySelectorAll("button").forEach(b => b.disabled = false); }
