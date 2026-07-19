@@ -31,6 +31,10 @@ profundidad** (scoring, Deuda Cultural, ICP, decisor), de forma **determinista**
 - `engine/rule_engine.py` + `engine/schemas.py` — **Capa 0**: motor de reglas
   determinista (Operativa/Discursiva/Rescate) que puntúa texto/transcripciones y
   emite señales auditables (tabla `senales_capa0`, endpoint `POST /webhook/ingesta`).
+- `ingesta/` — conectores que alimentan la Capa 0: `apify.py` (LinkedIn/Jobs/News),
+  `youtube.py` (transcripciones vía yt-dlp), `webhook.py` (POST resiliente con
+  reintentos+backoff). CLI: `python -m hd_scraper.ingesta {apify|youtube}` (o `run.sh`/`make`).
+  Credenciales por `.env` (cero hardcoding).
 - `api/app.py` — API + panel `/admin` (PWA).
 
 ## Fuentes de prospectos

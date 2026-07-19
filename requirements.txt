@@ -10,5 +10,8 @@ python-dateutil>=2.9,<3.0
 psycopg[binary]>=3.1,<4.0
 # BeautifulSoup: incluido pero de uso restringido (solo si es indispensable).
 beautifulsoup4>=4.12,<5.0
+# Conectores de ingesta Capa 0.
+python-dotenv>=1.0,<2.0     # carga credenciales desde .env (cero hardcoding)
+yt-dlp>=2024.1              # transcripciones de YouTube (se invoca por subprocess)
 # Test
 pytest>=8.0,<9.0
