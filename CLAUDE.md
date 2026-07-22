@@ -26,6 +26,13 @@ mide calidad de extracción, no juicio del contenido. Si una tarea te pide "deci
 esto es bueno/malo", "puntuar", "resumir con criterio" o "inferir el tipo de
 evento leyendo el texto", está fuera de alcance: no pertenece a hd-scraper.
 
+> **Nota (2026-07-22):** el alcance exacto de "interpretación" admisible en este
+> repo fue precisado por decisión del operador en la sección
+> **«Frontera de Interpretación (hd-scraper vs RadarHD)»** (más abajo). En lo que
+> respecta a scoring A/B/C, criterios ICP y clasificación preliminar de señales
+> de Deuda Cultural™ sobre datos ya extraídos, esa sección es la referencia
+> vigente; el resto de las prohibiciones de este apartado sigue intacto.
+
 ### Cómo se respeta "no interpreta" con campos como `tipo_evento`
 
 `tipo_evento` y `origen_declaracion` son obligatorios y literales, pero **no se
@@ -35,6 +42,42 @@ infieren leyendo el contenido**:
   corrida (estructura de la consulta), no el conector.
 - `origen_declaracion` se deriva de la **estructura de la fuente** (un feed de
   prensa ⇒ `prensa`; un job board ⇒ el que corresponda por estructura).
+
+## Frontera de Interpretación (hd-scraper vs RadarHD)
+
+> Sección añadida el 2026-07-22 por autorización explícita del operador
+> (registrada en `MEMORIA.md`), para resolver la contradicción normativa
+> detectada en `AUDITORIA_MOTORES.md` (hallazgo 3). Es una **adición** que
+> precisa la frontera; no deroga el resto de este documento.
+
+**Justificación en una frase:** hd-scraper puede **clasificar la señal que
+extrae**, pero **no puede decidir ni ejecutar acción comercial sobre ella**;
+esa decisión es exclusiva de Mario vía RadarHD.
+
+**Admisible en este repo** (interpretación determinista y auditable, aplicada
+SOLO sobre datos ya extraídos por este mismo motor; sin IA, sin juicio libre):
+
+- **Scoring A/B/C** de señales capturadas.
+- **Aplicación de criterios ICP** (score 0–100 por reglas declaradas).
+- **Clasificación preliminar de señales de Deuda Cultural™**: hipótesis
+  etiquetadas y reproducibles (mismo insumo ⇒ mismo resultado), marcadas siempre
+  como preliminares.
+
+**Exclusivo de RadarHD (JAMÁS aquí):**
+
+- Todo análisis con **Gemini** u otro LLM.
+- El **dashboard**.
+- El **pipeline comercial** (seguimiento, contacto ejecutado, envíos).
+- Cualquier decisión sobre **Expediente Activado**.
+
+**Implementación actual de esta frontera:** `hd_scraper/analisis.py` (scoring,
+ICP, Deuda preliminar) y `hd_scraper/engine/rule_engine.py` (reglas y pesos de
+señal). No reproducir esa lógica en otros módulos.
+
+**Regla de ampliación:** cualquier ampliación futura de interpretación en este
+repo exige actualizar **esta misma sección ANTES de escribir código**. Si una
+tarea propone interpretación no listada aquí, está fuera de alcance hasta que
+esta sección cambie.
 
 ## Contrato de datos (tabla `evidencias`)
 
