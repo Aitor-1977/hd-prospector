@@ -44,6 +44,9 @@ VERTICALES_HD: dict[str, str] = {
     "salud mental": '("salud mental" OR bienestar OR terapia)',
     "logística agrícola": '(agtech OR "logística agrícola" OR agro)',
     "identidad": '("identidad digital" OR verificación OR KYC)',
+    "hrtech": '(hrtech OR "recursos humanos" OR "gestión de talento" OR "people analytics")',
+    "saas_b2b": '("SaaS B2B" OR "software empresarial" OR "plataforma B2B" OR "enterprise software")',
+    "climatetech": '(climatetech OR "tecnología climática" OR "energía renovable" OR "sostenibilidad" OR cleantech)',
 }
 
 # Señal (tipo_evento del contrato) → VARIANTES de consulta. Cada variante es una

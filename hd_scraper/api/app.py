@@ -615,6 +615,203 @@ def scrape(payload: ScrapeIn, x_ingest_token: Optional[str] = Header(None)) -> d
     return {**modo, "total_escritos": total, "resultados": resultados}
 
 
+# --- Corpus: población sistemática de 5 verticales LATAM -------------------
+
+CORPUS_VERTICALES = ("fintech", "healthtech", "hrtech", "saas_b2b", "climatetech")
+CORPUS_TIPOS = ("queja", "ronda", "contratacion", "despido", "lanzamiento")
+CORPUS_ETAPA = ("Seed", "A", "B")
+
+
+class CorpusIn(BaseModel):
+    verticales: Optional[list[str]] = None
+    region: str = "LATAM"
+    categoria: str = "Startup"
+    presupuesto_s: float = 55.0
+
+
+@app.post("/corpus/poblar")
+def corpus_poblar(payload: CorpusIn,
+                  x_ingest_token: Optional[str] = Header(None)) -> dict:
+    """Población sistemática del corpus: 5 verticales × señales × LATAM.
+
+    Recorre cada vertical y tipo de señal, lanza consultas de descubrimiento
+    por Google News y acumula resultados. Respeta un presupuesto de tiempo
+    global para no reventar la función serverless.
+    """
+    _exigir_token(x_ingest_token)
+    if payload.region not in REGIONES:
+        raise HTTPException(400, f"region inválida: {payload.region}")
+    if payload.categoria not in CATEGORIAS:
+        raise HTTPException(400, f"categoria inválida: {payload.categoria}")
+    zona = region_clause(payload.region)
+    db = get_db()
+
+    verts = payload.verticales or list(CORPUS_VERTICALES)
+    for v in verts:
+        if v not in VERTICALES_HD:
+            raise HTTPException(400, f"vertical inválida: {v}")
+
+    presupuesto = min(max(payload.presupuesto_s, 5.0), 120.0)
+    t0 = time.monotonic()
+    parcial = False
+    progreso: list[dict] = []
+    total_escritos = 0
+    total_vistos = 0
+
+    for vert in verts:
+        if parcial:
+            break
+        for tipo in CORPUS_TIPOS:
+            if time.monotonic() - t0 > presupuesto:
+                parcial = True
+                break
+            consultas = queries_para(payload.categoria, tipo, vert)
+            ronda_escritos = 0
+            ronda_vistos = 0
+            for i, (termino, tipo_ev) in enumerate(consultas):
+                if i > 0 and time.monotonic() - t0 > presupuesto:
+                    parcial = True
+                    break
+                etapa_kw = " ".join(f'"{e}"' for e in CORPUS_ETAPA)
+                termino_etapa = f"{termino} ({etapa_kw})"
+                query = QuerySpec(
+                    empresa=termino_etapa, tipo_evento=tipo_ev,
+                    terminos=zona, categoria=payload.categoria, exact=False,
+                )
+                resultados = _correr_query(db, query, ["google_news"])
+                for r in resultados:
+                    ronda_escritos += r.get("escritos", 0)
+                    ronda_vistos += r.get("vistos", 0)
+            total_escritos += ronda_escritos
+            total_vistos += ronda_vistos
+            progreso.append({
+                "vertical": vert, "tipo": tipo,
+                "escritos": ronda_escritos, "vistos": ronda_vistos,
+            })
+
+    return {
+        "modo": "corpus",
+        "verticales": verts,
+        "region": payload.region,
+        "categoria": payload.categoria,
+        "total_escritos": total_escritos,
+        "total_vistos": total_vistos,
+        "parcial": parcial,
+        "tiempo_s": round(time.monotonic() - t0, 1),
+        "progreso": progreso,
+    }
+
+
+# --- Centro de Inteligencia Comercial --------------------------------------
+
+@app.get("/centro")
+def centro_inteligencia() -> dict:
+    """Centro de Inteligencia Comercial: tablero diario con 6 respuestas clave.
+
+    1. ¿Qué organizaciones entraron hoy?
+    2. ¿Cuáles cambiaron su narrativa (drift)?
+    3. ¿Cuáles muestran mayor Dolor Cultural?
+    4. ¿Cuáles califican para Peritaje Cualitativo?
+    5. ¿Cuáles califican para DolorMap Sprint?
+    6. ¿Cuáles necesitan seguimiento esta semana?
+    """
+    db = get_db()
+    hoy = ahora_iso()[:10]
+
+    nuevas_hoy_rows = db.fetch_all(
+        "SELECT DISTINCT empresa_mencionada FROM evidencias "
+        "WHERE estado = ? AND creado_en >= ? ORDER BY empresa_mencionada",
+        (ESTADO_OK, hoy),
+    )
+    nuevas_hoy = [r["empresa_mencionada"] for r in nuevas_hoy_rows]
+
+    drift_recientes = db.fetch_all(
+        "SELECT DISTINCT org_nombre FROM drift_evidencias "
+        "WHERE detectado_en >= ? ORDER BY org_nombre",
+        (hoy,),
+    )
+    cambio_narrativa = [r["org_nombre"] for r in drift_recientes]
+
+    exp_data = _construir_expedientes(None, limite=100)
+    expedientes = exp_data.get("expedientes", [])
+
+    mayor_dolor = [
+        {
+            "nombre": e["nombre"],
+            "scoring": e["scoring"],
+            "tipo_deuda": e["tipo_deuda"],
+            "intensidad": e["intensidad"],
+            "score_icp": e["score_icp"],
+            "angulo_conversacion": e["angulo_conversacion"],
+            "decisor_sugerido": e["decisor_sugerido"],
+        }
+        for e in expedientes
+        if e["scoring"] == "A"
+    ]
+
+    califican_peritaje = []
+    califican_dolormap = []
+    pipeline_rows = db.fetch_all(
+        "SELECT org_nombre, etapa, actualizado_en FROM pipeline_comercial "
+        "ORDER BY actualizado_en DESC",
+    )
+    pipeline_map = {r["org_nombre"].lower(): dict(r) for r in pipeline_rows}
+
+    for e in expedientes:
+        key = e["nombre"].lower()
+        pipe = pipeline_map.get(key)
+        etapa = pipe["etapa"] if pipe else None
+        info = {
+            "nombre": e["nombre"],
+            "scoring": e["scoring"],
+            "score_icp": e["score_icp"],
+            "tipo_deuda": e["tipo_deuda"],
+            "etapa_actual": etapa,
+        }
+        if e["scoring"] in ("A", "B") and e["score_icp"] >= 40:
+            if etapa in (None, "observacion", "vigilancia"):
+                califican_peritaje.append(info)
+        if e["scoring"] == "A" and e["score_icp"] >= 50:
+            if etapa in (None, "observacion", "vigilancia", "peritaje"):
+                califican_dolormap.append(info)
+
+    siete_dias_atras = ahora_iso()[:10]
+    import datetime as _dt
+    hace_7 = (_dt.date.fromisoformat(hoy) - _dt.timedelta(days=7)).isoformat()
+    seguimiento_rows = db.fetch_all(
+        "SELECT org_nombre, etapa, notas, actualizado_en FROM pipeline_comercial "
+        "WHERE etapa NOT IN ('cerrado') AND actualizado_en < ? "
+        "ORDER BY actualizado_en ASC LIMIT 20",
+        (hace_7,),
+    )
+    seguimiento = [
+        {
+            "nombre": r["org_nombre"],
+            "etapa": r["etapa"],
+            "dias_sin_mover": (_dt.date.fromisoformat(hoy) - _dt.date.fromisoformat(r["actualizado_en"][:10])).days,
+            "notas": r["notas"],
+        }
+        for r in seguimiento_rows
+    ]
+
+    return {
+        "fecha": hoy,
+        "nuevas_hoy": {"total": len(nuevas_hoy), "organizaciones": nuevas_hoy[:30]},
+        "cambio_narrativa": {"total": len(cambio_narrativa), "organizaciones": cambio_narrativa[:20]},
+        "mayor_dolor": {"total": len(mayor_dolor), "organizaciones": mayor_dolor[:20]},
+        "califican_peritaje": {"total": len(califican_peritaje), "organizaciones": califican_peritaje[:20]},
+        "califican_dolormap": {"total": len(califican_dolormap), "organizaciones": califican_dolormap[:20]},
+        "seguimiento_semanal": {"total": len(seguimiento), "organizaciones": seguimiento[:20]},
+        "resumen": {
+            "total_expedientes": len(expedientes),
+            "scoring_a": sum(1 for e in expedientes if e["scoring"] == "A"),
+            "scoring_b": sum(1 for e in expedientes if e["scoring"] == "B"),
+            "scoring_c": sum(1 for e in expedientes if e["scoring"] == "C"),
+            "en_pipeline": len(pipeline_rows),
+        },
+    }
+
+
 # --- PWA: instalable como app (base para generar el APK con PWABuilder) ---
 
 _STATIC = Path(__file__).resolve().parent / "static"
@@ -1816,6 +2013,18 @@ _ADMIN_HTML = """<!doctype html>
 <div class="counts" id="counts"></div>
 
 <section>
+  <h2>🎯 Centro de Inteligencia Comercial</h2>
+  <div class="hint">Tablero diario: una sola pantalla con las 6 preguntas que importan. Actualiza cada vez que lo abres.</div>
+  <div class="row">
+    <button id="centro_cargar" class="sec">📊 Actualizar Centro</button>
+    <button id="corpus_btn" class="sec">🌎 Poblar Corpus (5 verticales LATAM)</button>
+  </div>
+  <div class="msg" id="centro_msg"></div>
+  <div class="msg" id="corpus_msg"></div>
+  <div id="centro_contenido"></div>
+</section>
+
+<section>
   <h2>① Buscar por ecosistema</h2>
   <div class="hint">Elige el tipo de señal y toca un ecosistema. Rastrea ese sector con ese tipo de evento y etiqueta las señales. Para descubrir sin teclear nombres.</div>
   <div class="row">
@@ -1835,8 +2044,11 @@ _ADMIN_HTML = """<!doctype html>
       <select id="c_vertical">
         <option value="todas">Todas</option>
         <option value="fintech">Fintech</option>
-        <option value="edtech">Edtech</option>
         <option value="healthtech">Healthtech</option>
+        <option value="hrtech">HRTech</option>
+        <option value="saas_b2b">SaaS B2B</option>
+        <option value="climatetech">ClimateTech</option>
+        <option value="edtech">Edtech</option>
         <option value="salud mental">Salud mental</option>
         <option value="logística agrícola">Logística agrícola</option>
         <option value="identidad">Identidad</option>
@@ -2804,6 +3016,130 @@ _ADMIN_HTML = """<!doctype html>
       } else { m.className = "msg err"; m.textContent = "Error: " + (d.detail || r.status); }
     } catch (e) { m.className = "msg err"; m.textContent = "Error de red: " + e; }
     finally { $("enviar").disabled = false; }
+  });
+
+  // 🎯 Centro de Inteligencia Comercial
+  $("centro_cargar").addEventListener("click", async () => {
+    const m = $("centro_msg"), cont = $("centro_contenido");
+    m.className = "msg"; m.style.display = "block"; m.textContent = "Cargando centro de inteligencia…";
+    cont.innerHTML = "";
+    try {
+      const d = await (await fetch("/centro")).json();
+      m.style.display = "none";
+
+      let html = '<div style="margin-top:.6rem">';
+
+      // Resumen general
+      html += '<div class="card" style="border-left:4px solid #2563eb">';
+      html += '<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">';
+      html += '<b>📅 ' + esc(d.fecha) + '</b>';
+      html += '<span class="chip">' + d.resumen.total_expedientes + ' org.</span>';
+      html += '<span class="badge badge-a">A: ' + d.resumen.scoring_a + '</span>';
+      html += '<span class="badge badge-b">B: ' + d.resumen.scoring_b + '</span>';
+      html += '<span class="badge badge-c">C: ' + d.resumen.scoring_c + '</span>';
+      html += '<span class="chip">Pipeline: ' + d.resumen.en_pipeline + '</span>';
+      html += '</div></div>';
+
+      // 1. Nuevas hoy
+      html += '<details style="margin:.5rem 0" ' + (d.nuevas_hoy.total ? 'open' : '') + '><summary style="cursor:pointer;font-weight:600">🆕 Organizaciones nuevas hoy (' + d.nuevas_hoy.total + ')</summary>';
+      if (d.nuevas_hoy.organizaciones.length) {
+        html += '<div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.3rem">';
+        html += d.nuevas_hoy.organizaciones.map(o => '<span class="chip">' + esc(o) + '</span>').join("");
+        html += '</div>';
+      } else { html += '<div class="hint">Ninguna organización nueva hoy.</div>'; }
+      html += '</details>';
+
+      // 2. Cambio narrativa
+      html += '<details style="margin:.5rem 0" ' + (d.cambio_narrativa.total ? 'open' : '') + '><summary style="cursor:pointer;font-weight:600">📡 Cambiaron narrativa hoy (' + d.cambio_narrativa.total + ')</summary>';
+      if (d.cambio_narrativa.organizaciones.length) {
+        html += '<div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.3rem">';
+        html += d.cambio_narrativa.organizaciones.map(o => '<span class="chip" style="border-color:#7c3aed">' + esc(o) + '</span>').join("");
+        html += '</div>';
+      } else { html += '<div class="hint">Sin cambios narrativos detectados hoy.</div>'; }
+      html += '</details>';
+
+      // 3. Mayor dolor
+      html += '<details style="margin:.5rem 0" open><summary style="cursor:pointer;font-weight:600">🔴 Mayor Dolor Cultural — scoring A (' + d.mayor_dolor.total + ')</summary>';
+      if (d.mayor_dolor.organizaciones.length) {
+        html += d.mayor_dolor.organizaciones.map(o =>
+          '<div class="card exp-a" style="padding:.5rem .6rem">' +
+          '<div class="exp-header"><span class="org-name">' + esc(o.nombre) + '</span>' +
+          '<span class="badge badge-a">A</span>' +
+          '<span class="badge badge-icp">ICP ' + o.score_icp + '</span>' +
+          '<span class="badge badge-int">' + esc(o.intensidad) + '</span></div>' +
+          (o.tipo_deuda ? '<div class="deuda-title" style="font-size:.82rem">🧩 ' + esc(o.tipo_deuda) + '</div>' : '') +
+          '<div class="meta">💬 ' + esc(o.angulo_conversacion) + '</div>' +
+          '<div class="meta">🎯 ' + esc(o.decisor_sugerido) + '</div>' +
+          '<div class="exp-actions"><button class="sec" onclick="verDolorMapDesdeExp(this)" data-org="' + esc(o.nombre) + '">🗺️ DolorMap</button></div>' +
+          '</div>'
+        ).join("");
+      } else { html += '<div class="hint">Ninguna organización con scoring A todavía.</div>'; }
+      html += '</details>';
+
+      // 4. Califican peritaje
+      html += '<details style="margin:.5rem 0" ' + (d.califican_peritaje.total ? 'open' : '') + '><summary style="cursor:pointer;font-weight:600">🔬 Califican para Peritaje (' + d.califican_peritaje.total + ')</summary>';
+      if (d.califican_peritaje.organizaciones.length) {
+        html += d.califican_peritaje.organizaciones.map(o =>
+          '<div class="card" style="padding:.4rem .5rem"><b>' + esc(o.nombre) + '</b> ' +
+          '<span class="badge badge-' + o.scoring.toLowerCase() + '">' + esc(o.scoring) + '</span> ' +
+          '<span class="badge badge-icp">ICP ' + o.score_icp + '</span>' +
+          (o.etapa_actual ? ' <span class="chip">' + esc(o.etapa_actual) + '</span>' : ' <span class="chip" style="border-color:#f59e0b">sin pipeline</span>') +
+          (o.tipo_deuda ? '<div class="meta">🧩 ' + esc(o.tipo_deuda) + '</div>' : '') +
+          '<div class="exp-actions"><button class="sec" onclick="registrarPipelineDesdeExp(this)" data-org="' + esc(o.nombre) + '">📋 → Peritaje</button></div></div>'
+        ).join("");
+      } else { html += '<div class="hint">Ninguna organización califica aún (scoring A/B, ICP ≥ 40, etapa ≤ vigilancia).</div>'; }
+      html += '</details>';
+
+      // 5. Califican DolorMap sprint
+      html += '<details style="margin:.5rem 0" ' + (d.califican_dolormap.total ? 'open' : '') + '><summary style="cursor:pointer;font-weight:600">🗺️ Califican para DolorMap Sprint (' + d.califican_dolormap.total + ')</summary>';
+      if (d.califican_dolormap.organizaciones.length) {
+        html += d.califican_dolormap.organizaciones.map(o =>
+          '<div class="card" style="padding:.4rem .5rem"><b>' + esc(o.nombre) + '</b> ' +
+          '<span class="badge badge-a">A</span> ' +
+          '<span class="badge badge-icp">ICP ' + o.score_icp + '</span>' +
+          (o.etapa_actual ? ' <span class="chip">' + esc(o.etapa_actual) + '</span>' : ' <span class="chip" style="border-color:#dc2626">sin pipeline</span>') +
+          (o.tipo_deuda ? '<div class="meta">🧩 ' + esc(o.tipo_deuda) + '</div>' : '') +
+          '<div class="exp-actions"><button class="sec" onclick="verDolorMapDesdeExp(this)" data-org="' + esc(o.nombre) + '">🗺️ DolorMap Sprint</button></div></div>'
+        ).join("");
+      } else { html += '<div class="hint">Ninguna califica aún (scoring A, ICP ≥ 50, etapa ≤ peritaje).</div>'; }
+      html += '</details>';
+
+      // 6. Seguimiento semanal
+      html += '<details style="margin:.5rem 0" ' + (d.seguimiento_semanal.total ? 'open' : '') + '><summary style="cursor:pointer;font-weight:600">📅 Necesitan seguimiento esta semana (' + d.seguimiento_semanal.total + ')</summary>';
+      if (d.seguimiento_semanal.organizaciones.length) {
+        html += d.seguimiento_semanal.organizaciones.map(o =>
+          '<div class="card" style="padding:.4rem .5rem"><b>' + esc(o.nombre) + '</b> ' +
+          '<span class="chip">' + esc(o.etapa) + '</span> ' +
+          '<span class="chip" style="border-color:#dc2626">' + o.dias_sin_mover + ' días sin mover</span>' +
+          (o.notas ? '<div class="meta">' + esc(o.notas) + '</div>' : '') +
+          '<div class="exp-actions"><button class="sec" onclick="registrarPipelineDesdeExp(this)" data-org="' + esc(o.nombre) + '">⏩ Avanzar</button></div></div>'
+        ).join("");
+      } else { html += '<div class="hint">Sin organizaciones pendientes de seguimiento.</div>'; }
+      html += '</details>';
+
+      html += '</div>';
+      cont.innerHTML = html;
+    } catch (e) { m.className = "msg err"; m.textContent = "Error: " + e; }
+  });
+
+  // 🌎 Poblar Corpus (5 verticales LATAM)
+  $("corpus_btn").addEventListener("click", async () => {
+    const m = $("corpus_msg"), token = tok();
+    if (!token) { m.className = "msg err"; m.style.display = "block"; m.textContent = "Falta el token."; return; }
+    $("corpus_btn").disabled = true;
+    m.className = "msg"; m.style.display = "block"; m.textContent = "Poblando corpus (5 verticales × señales × LATAM)… esto tarda hasta 1 min.";
+    try {
+      const r = await fetch("/corpus/poblar", { method: "POST",
+        headers: { "Content-Type": "application/json", "X-Ingest-Token": token },
+        body: JSON.stringify({ region: region() }) });
+      const o = await leerJson(r);
+      if (!o.ok) { m.className = "msg err"; m.textContent = "Error: " + (o.error || (o.data && o.data.detail) || r.status); return; }
+      const d = o.data;
+      m.className = "msg ok";
+      m.textContent = "✓ " + d.total_escritos + " evidencias nuevas · " + d.total_vistos + " titulares vistos · " + d.tiempo_s + "s" + (d.parcial ? " (parcial: se agotó el presupuesto; toca de nuevo)" : " (completo)");
+      cargarExpedientes({});
+    } catch (e) { m.className = "msg err"; m.textContent = "Error de red: " + e; }
+    finally { $("corpus_btn").disabled = false; }
   });
 
   // PWA: registra el service worker para que sea instalable como app.

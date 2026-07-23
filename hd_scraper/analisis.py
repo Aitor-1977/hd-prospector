@@ -24,7 +24,7 @@ from typing import Optional
 # Verticales dependientes de contexto que le interesan a HD (perfil ideal).
 VERTICALES_HD_SET = {
     "fintech", "edtech", "healthtech", "salud mental", "logística agrícola",
-    "identidad",
+    "identidad", "hrtech", "saas_b2b", "climatetech",
 }
 
 # Señales que implican DOLOR organizacional explícito (máxima prioridad: hay
@@ -132,6 +132,9 @@ MATIZ_VERTICAL: dict[str, str] = {
     "healthtech": "en healthtech, el error erosiona la confianza clínica",
     "edtech": "en edtech, la retención depende de resultados percibidos",
     "identidad": "en identidad, un fallo golpea directo la confianza y el cumplimiento",
+    "hrtech": "en hrtech, la fricción interna escala más rápido porque el producto toca la cultura directamente",
+    "saas_b2b": "en SaaS B2B, el churn es lento pero caro: cada cliente perdido es un contrato largo",
+    "climatetech": "en climatetech, la misión amplifica la tensión entre impacto y rentabilidad",
 }
 
 # Rol de decisor probable a buscar, según la señal dominante. Es una PISTA de a
