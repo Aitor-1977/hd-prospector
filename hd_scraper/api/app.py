@@ -1288,6 +1288,156 @@ def listar_senales_capa0(
     return {"total": len(filas), "items": [dict(f) for f in filas]}
 
 
+# --- Expedientes Vivos: evidencia agrupada por organización ----------------
+#
+# Cada expediente agrupa TODAS las evidencias de una organización, corre el
+# análisis determinista sobre las señales combinadas, detecta patrones
+# (COMBINACIONES de señales) y genera la hipótesis de Dolor Cultural.
+
+from ..analisis import COMBINACIONES, DEUDA_POR_SENAL, ANGULO_POR_DEUDA
+
+
+def _detectar_patrones(keywords: list[str]) -> list[dict]:
+    """Detecta patrones (combinaciones de 2+ señales) presentes en los keywords."""
+    ks = set(keywords or [])
+    patrones = []
+    for tags, label, razon in COMBINACIONES:
+        if tags <= ks:
+            patrones.append({"patron": label, "razonamiento": razon,
+                             "senales": sorted(tags)})
+    return patrones
+
+
+def _construir_expedientes(categorias: list[str] | None, limite: int = 30) -> dict:
+    """Agrupa evidencia por organización y enriquece con análisis completo."""
+    db = get_db()
+    cats = list(categorias or [])
+    if cats:
+        marc = ",".join("?" for _ in cats)
+        clausula = f"estado = ? AND categoria IN ({marc})"
+        params: list = [ESTADO_OK, *cats]
+    else:
+        clausula, params = "estado = ?", [ESTADO_OK]
+
+    filas = db.fetch_all(
+        f"SELECT * FROM evidencias WHERE {clausula} ORDER BY creado_en DESC LIMIT 500",
+        tuple(params),
+    )
+
+    orgs: dict[str, dict] = {}
+    for row in filas:
+        titulo = row["cita_textual"] or ""
+        org = detectar_empresa(titulo) or (row["empresa_mencionada"] or "").strip()
+        if not org:
+            continue
+        kws = _keywords(row)
+        ok, _ = evaluar_relevancia(titulo, kws, bool(org), exigir_evento=False)
+        if not ok:
+            continue
+        key = org.lower()
+        if key not in orgs:
+            orgs[key] = {"nombre": org, "evidencias_raw": [],
+                         "keywords_set": set(),
+                         "categoria": row["categoria"] or "",
+                         "mejor_confianza": 0.0, "mejor_calidad": "Baja"}
+        orgs[key]["evidencias_raw"].append(row)
+        orgs[key]["keywords_set"].update(kws)
+        c = row["confianza"] or 0.0
+        if c > orgs[key]["mejor_confianza"]:
+            orgs[key]["mejor_confianza"] = c
+            orgs[key]["mejor_calidad"] = row["calidad_captura"] or "Baja"
+
+    sitios: dict[str, str] = {}
+    for p in db.fetch_all(
+        "SELECT nombre, sitio_web FROM prospectos "
+        "WHERE sitio_web IS NOT NULL AND sitio_web <> ''"
+    ):
+        sitios[(p["nombre"] or "").strip().lower()] = p["sitio_web"]
+
+    expedientes = []
+    for key, data in orgs.items():
+        all_kws = list(data["keywords_set"])
+        vertical = ""
+        for row in data["evidencias_raw"]:
+            v = sugerir_vertical(row["cita_textual"] or "")
+            if v:
+                vertical = v
+                break
+
+        a = analizar(
+            all_kws, vertical=vertical,
+            confianza=data["mejor_confianza"],
+            calidad=data["mejor_calidad"],
+            categoria=data["categoria"],
+        )
+
+        evidencias = []
+        for row in data["evidencias_raw"]:
+            evidencias.append({
+                "texto": row["cita_textual"],
+                "fuente": row["nombre_medio"],
+                "fecha": (row["fecha_publicacion"] or "")[:10],
+                "url": row["url_fuente"],
+                "tipo_evento": row["tipo_evento"],
+                "confianza": row["confianza"],
+            })
+
+        patrones = _detectar_patrones(all_kws)
+
+        sitio = sitios.get(key, "")
+        contacto = rutas_contacto(sitio, "") if sitio else {
+            "dominio": "", "email_sugerido": "", "verificado": False}
+
+        expedientes.append({
+            "nombre": data["nombre"],
+            "categoria": data["categoria"],
+            "vertical": vertical,
+            "scoring": a["scoring"],
+            "score_icp": a["score_icp"],
+            "intensidad": a["intensidad"],
+            "tipo_deuda": a["tipo_deuda"],
+            "deuda_razon": a["deuda_razon"],
+            "deuda_secundaria": a.get("deuda_secundaria", ""),
+            "angulo_conversacion": a["angulo_conversacion"],
+            "decisor_sugerido": a["decisor_sugerido"],
+            "senal_dominante": a.get("senal_dominante", ""),
+            "evidencias": evidencias,
+            "total_evidencias": len(evidencias),
+            "patrones": patrones,
+            "keywords": all_kws,
+            "contacto": contacto,
+            "linkedin": linkedin_search_url(data["nombre"]),
+            "google": google_search_url(data["nombre"]),
+        })
+
+    expedientes.sort(
+        key=lambda x: (_ORDEN_SCORING.get(x["scoring"], 9), -x["score_icp"]))
+
+    resumen = {"A": 0, "B": 0, "C": 0}
+    for e in expedientes:
+        resumen[e["scoring"]] = resumen.get(e["scoring"], 0) + 1
+
+    return {
+        "total": len(expedientes[:limite]),
+        "resumen_scoring": resumen,
+        "expedientes": expedientes[:limite],
+    }
+
+
+@app.get("/expedientes")
+def listar_expedientes(
+    categoria: str | None = Query(None),
+    categorias: str | None = Query(None),
+    limite: int = Query(30, ge=1, le=100),
+) -> dict:
+    """Expedientes Vivos: evidencia agrupada por organización + análisis completo.
+
+    Cada expediente incluye todas las evidencias de esa organización, patrones
+    detectados, hipótesis de Dolor Cultural, scoring, ICP y decisor sugerido.
+    """
+    return _construir_expedientes(_cats_validas(categoria, categorias), limite)
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_form() -> str:
     """Pantalla de descubrimiento (scraping) y alta de prospectos (PWA instalable)."""
@@ -1345,9 +1495,37 @@ _ADMIN_HTML = """<!doctype html>
   .chips-sel label { display: inline-flex; align-items: center; gap: .3rem; font-size: .95rem; }
   .dl { display: block; text-align: center; text-decoration: none; color: inherit;
     padding: .7rem; border: 1px solid rgba(128,128,128,.5); border-radius: .5rem; font-weight: 600; }
+  /* Expediente Vivo styles */
+  .exp { border: 1px solid rgba(128,128,128,.25); border-radius: .7rem; padding: .8rem; margin-top: .8rem; }
+  .exp-a { border-left: 4px solid #dc2626; }
+  .exp-b { border-left: 4px solid #f59e0b; }
+  .exp-c { border-left: 4px solid #6b7280; }
+  .exp-header { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-bottom: .4rem; }
+  .exp-header .org-name { font-size: 1.1rem; font-weight: 700; }
+  .badge { display: inline-block; padding: .15rem .45rem; border-radius: .3rem; font-size: .75rem; font-weight: 700; }
+  .badge-a { background: #dc2626; color: #fff; }
+  .badge-b { background: #f59e0b; color: #000; }
+  .badge-c { background: #6b7280; color: #fff; }
+  .badge-icp { background: rgba(37,99,235,.15); color: #2563eb; border: 1px solid rgba(37,99,235,.3); }
+  .badge-int { background: rgba(128,128,128,.12); }
+  .badge-deuda { background: rgba(168,85,247,.12); color: #7c3aed; border: 1px solid rgba(168,85,247,.3); }
+  .deuda-box { background: rgba(168,85,247,.06); border: 1px solid rgba(168,85,247,.2); border-radius: .5rem; padding: .5rem .6rem; margin: .4rem 0; }
+  .deuda-title { font-weight: 700; color: #7c3aed; font-size: .9rem; }
+  .deuda-reason { font-size: .82rem; opacity: .8; margin-top: .15rem; }
+  .angulo { font-size: .82rem; margin-top: .3rem; padding: .3rem .5rem; background: rgba(37,99,235,.06); border-radius: .4rem; border: 1px solid rgba(37,99,235,.15); }
+  .patron-box { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.2); border-radius: .4rem; padding: .35rem .5rem; margin-top: .3rem; font-size: .82rem; }
+  .ev-toggle { cursor: pointer; font-size: .82rem; color: #3b82f6; margin-top: .4rem; display: inline-block; }
+  .ev-list { display: none; margin-top: .3rem; }
+  .ev-list.open { display: block; }
+  .ev-item { font-size: .8rem; padding: .3rem .4rem; border-left: 2px solid rgba(128,128,128,.3); margin: .3rem 0 .3rem .3rem; }
+  .ev-item a { font-size: .78rem; }
+  .exp-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .5rem; }
+  .exp-actions button, .exp-actions a { font-size: .8rem; padding: .35rem .6rem; margin-top: 0; width: auto; }
+  .resumen-bar { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; margin: .5rem 0; }
+  .resumen-bar .chip { font-weight: 700; }
 </style></head><body>
-<h1>hd-prospector · Radar</h1>
-<p class="sub">Radar de prospección para Hamaca Digital. ① Rastrea candidatos por ecosistema, vertical y señal de fricción → ② revísalos → ③ el expediente se <b>auto-investiga</b> (web, tesis, vertical) y tú lo confirmas. Extrae y almacena hechos públicos; la interpretación (Deuda Cultural™) es de HD, no del motor.</p>
+<h1>hd-prospector · Radar de Inteligencia Antropológica</h1>
+<p class="sub">① Rastrea señales por ecosistema → ② <b>Expedientes Vivos</b>: evidencia agrupada por organización con <b>patrones</b>, <b>Dolor Cultural™</b> (hipótesis determinista) y <b>scoring A/B/C</b> → ③ auto-investiga y guarda el prospecto. Internet → Evidencia → Patrón → Dolor → Prospecto.</p>
 
 <label class="req">Token de acceso</label>
 <input id="token" type="password" placeholder="HD_INGEST_TOKEN" autocomplete="off">
@@ -1439,9 +1617,10 @@ _ADMIN_HTML = """<!doctype html>
 </section>
 
 <section>
-  <h2>② Organizaciones detectadas</h2>
-  <div class="hint">Cada tarjeta es una <b>organización</b> detectada a partir de una <b>señal</b> (evidencia cruda de prensa). La noticia es evidencia, no el sujeto. Toca “abrir evidencia” para leer la fuente, o “🔬 Iniciar observación” para marcar la organización.</div>
-  <div id="evidencias"></div>
+  <h2>② Expedientes Vivos</h2>
+  <div class=”hint”>Cada tarjeta es un <b>expediente de organización</b> construido a partir de <b>múltiples evidencias</b>. Las señales se combinan para detectar <b>patrones</b> y generar una <b>hipótesis de Dolor Cultural™</b> (tipo + intensidad + razonamiento). Scoring A = atacar · B = observar · C = archivo.</div>
+  <div class=”resumen-bar” id=”exp_resumen”></div>
+  <div id=”expedientes”></div>
 </section>
 
 <section>
@@ -1595,7 +1774,7 @@ _ADMIN_HTML = """<!doctype html>
     const cat = btn.dataset.cat, tipo = $("c_tipo").value, vert = $("c_vertical").value;
     if ($("categoria")) $("categoria").value = cat;   // precarga categoría en ③
     scrapear({ categoria: cat, tipo_evento: tipo, vertical: vert, region: region() },
-             `${cat} · ${tipo} · ${vert} · ${region()}`, () => cargarEvidencias({ categoria: cat }));
+             `${cat} · ${tipo} · ${vert} · ${region()}`, () => cargarExpedientes({ categoria: cat }));
   }));
 
   // Directorio: trae empresas reales (Wikidata) como prospectos (volumen).
@@ -1623,52 +1802,90 @@ _ADMIN_HTML = """<!doctype html>
     if (!empresa) { const m = $("s_msg"); m.className = "msg err"; m.style.display = "block"; m.textContent = "Escribe una empresa."; return; }
     $("nombre").value = empresa;                       // precarga para ③
     scrapear({ empresa, tipo_evento: $("s_tipo").value, region: region(), connectors: $("s_fuentes").value.split(",") },
-             empresa, () => cargarEvidencias({ empresa }));
+             empresa, () => cargarExpedientes({ empresa }));
   });
 
-  // ② Listar evidencias (por empresa o por categoría)
-  async function cargarEvidencias(filtro) {
-    const cont = $("evidencias");
-    const qs = new URLSearchParams({ limite: "25", limpio: "1", ...filtro });
+  // ② Cargar Expedientes Vivos (agrupados por organización, con análisis)
+  let _expId = 0;
+  async function cargarExpedientes(filtro) {
+    const cont = $("expedientes"), res = $("exp_resumen");
+    cont.innerHTML = '<div class="hint">Cargando expedientes…</div>';
+    const qs = new URLSearchParams({ limite: "30", ...filtro });
     try {
-      const d = await (await fetch("/evidencias?" + qs)).json();
-      if (!d.items.length) { cont.innerHTML = '<div class="hint">Sin organizaciones detectadas todavía. Prueba otra categoría o revisa /stats.</div>'; return; }
-      cont.innerHTML = d.items.map(e => {
-        // Jerarquía de laboratorio: el SUJETO es la organización; la noticia es
-        // solo EVIDENCIA (señal observada), no un prospecto que se "guarda".
-        const org = esc(e.organizacion || e.empresa_mencionada) || "(organización no identificada)";
-        const tipo = e.categoria ? esc(e.categoria) : "sin clasificar";
-        const fecha = (e.fecha_publicacion || "").slice(0, 10);
+      const d = await (await fetch("/expedientes?" + qs)).json();
+      if (!d.expedientes || !d.expedientes.length) {
+        cont.innerHTML = '<div class="hint">Sin expedientes todavía. Rastrea un ecosistema arriba.</div>';
+        res.innerHTML = "";
+        return;
+      }
+      const s = d.resumen_scoring || {};
+      res.innerHTML = `<span class="chip">${d.total} org.</span>` +
+        (s.A ? `<span class="chip badge badge-a">A: ${s.A}</span>` : "") +
+        (s.B ? `<span class="chip badge badge-b">B: ${s.B}</span>` : "") +
+        (s.C ? `<span class="chip badge badge-c">C: ${s.C}</span>` : "");
+      cont.innerHTML = d.expedientes.map(e => {
+        const sc = (e.scoring||"C").toUpperCase();
+        const bcls = sc === "A" ? "badge-a" : sc === "B" ? "badge-b" : "badge-c";
+        const ecls = sc === "A" ? "exp-a" : sc === "B" ? "exp-b" : "exp-c";
+        const uid = "ev_" + (++_expId);
+
+        let deudaHtml = "";
+        if (e.tipo_deuda) {
+          deudaHtml = `<div class="deuda-box">
+            <div class="deuda-title">🧩 ${esc(e.tipo_deuda)}${e.deuda_secundaria ? ' <span style="font-weight:400;opacity:.7">+ ' + esc(e.deuda_secundaria) + '</span>' : ''}</div>
+            <div class="deuda-reason">${esc(e.deuda_razon)}</div>
+          </div>`;
+        }
+
+        let anguloHtml = "";
+        if (e.angulo_conversacion) {
+          anguloHtml = `<div class="angulo">💬 <b>Ángulo:</b> ${esc(e.angulo_conversacion)}</div>`;
+        }
+
+        let patronesHtml = "";
+        if (e.patrones && e.patrones.length) {
+          patronesHtml = e.patrones.map(p =>
+            `<div class="patron-box">🔗 <b>${esc(p.patron)}</b> — ${esc(p.razonamiento)}</div>`
+          ).join("");
+        }
+
+        const evItems = (e.evidencias || []).map(ev =>
+          `<div class="ev-item">
+            ${esc(ev.texto)}
+            <div><b>${esc(ev.fuente)}</b>${ev.fecha ? " · " + esc(ev.fecha) : ""}${ev.tipo_evento ? " · " + esc(ev.tipo_evento) : ""}
+            ${ev.url ? ' · <a href="' + esc(safeUrl(ev.url)) + '" target="_blank" rel="noopener">fuente ↗</a>' : ""}</div>
+          </div>`
+        ).join("");
+
         return `
-        <div class="card">
-          <div class="org">🏢 <b>${org}</b> <span class="chip">${tipo}</span></div>
-          <div class="meta"><span class="chip">Señal observada</span> ${esc(e.cita_textual)}${e.tipo_evento ? " · <b>" + esc(e.tipo_evento) + "</b>" : ""}</div>
-          <div class="meta">Fuente: ${esc(e.nombre_medio)}${fecha ? " · " + fecha : ""}
-            · <a href="${esc(safeUrl(e.url_fuente))}" target="_blank" rel="noopener">abrir evidencia ↗</a></div>
-          <button class="sec" onclick="iniciarObservacion(this)" data-org="${org}">🔬 Iniciar observación</button>
+        <div class="exp ${ecls}">
+          <div class="exp-header">
+            <span class="org-name">🏢 ${esc(e.nombre)}</span>
+            <span class="badge ${bcls}">${sc}</span>
+            <span class="badge badge-icp">ICP ${e.score_icp}</span>
+            <span class="badge badge-int">${esc(e.intensidad||"")}</span>
+            ${e.categoria ? '<span class="chip">' + esc(e.categoria) + '</span>' : ""}
+            ${e.vertical ? '<span class="chip">' + esc(e.vertical) + '</span>' : ""}
+          </div>
+          ${deudaHtml}
+          ${patronesHtml}
+          ${anguloHtml}
+          <div class="meta" style="margin-top:.3rem">🎯 Decisor: <b>${esc(e.decisor_sugerido)}</b>${e.contacto && e.contacto.email_sugerido ? " · ✉️ " + esc(e.contacto.email_sugerido) : ""}</div>
+          <span class="ev-toggle" onclick="document.getElementById('${uid}').classList.toggle('open');this.textContent=this.textContent.includes('▶')? '▼ Ocultar evidencias (${e.total_evidencias})':'▶ Ver evidencias (${e.total_evidencias})'">▶ Ver evidencias (${e.total_evidencias})</span>
+          <div id="${uid}" class="ev-list">${evItems}</div>
+          <div class="exp-actions">
+            <button class="sec" onclick="prefill(this.dataset.n)" data-n="${esc(e.nombre)}">➕ Guardar y auto-investigar</button>
+            ${e.linkedin ? '<a class="sec" href="' + esc(safeUrl(e.linkedin)) + '" target="_blank" rel="noopener">LinkedIn ↗</a>' : ""}
+            ${e.contacto && e.contacto.dominio ? '<button class="sec" onclick="verificarCorreo(this)" data-dom="' + esc(e.contacto.dominio) + '">✓ Verificar correo</button> <span class="vres"></span>' : ""}
+          </div>
         </div>`; }).join("");
-    } catch (e) { cont.innerHTML = '<div class="hint">No se pudieron cargar.</div>'; }
+    } catch (e) { cont.innerHTML = '<div class="hint">Error al cargar expedientes: ' + esc(String(e)) + '</div>'; }
   }
+
   window.prefill = (nombre) => {
     $("nombre").value = nombre;
     $("nombre").scrollIntoView({ behavior: "smooth" });
-    $("enrich_btn").click();   // investiga automáticamente al promover (research-first)
-  };
-
-  // Iniciar observación (PLACEHOLDER). No crea prospecto ni escribe en tablas
-  // comerciales: marca la organización para futura observación. En el futuro esto
-  // detonará el Concentrador de Evidencia (RadarHD); hoy solo registra la intención.
-  window.iniciarObservacion = (btn) => {
-    const org = btn.dataset.org || "";
-    console.log("[observación] iniciar para organización:", org);  // evento interno (demo)
-    if (btn.dataset.hecho) return;
-    btn.dataset.hecho = "1";
-    btn.textContent = "🔬 En observación";
-    btn.disabled = true;
-    const nota = document.createElement("div");
-    nota.className = "hint";
-    nota.textContent = "Observación registrada (demo). Se conectará al Concentrador de Evidencia de RadarHD.";
-    btn.after(nota);
+    $("enrich_btn").click();
   };
 
   // ②·⁵ Informe profundo: análisis determinista de lo capturado.
