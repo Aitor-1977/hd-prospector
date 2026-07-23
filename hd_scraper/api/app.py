@@ -35,6 +35,7 @@ from .. import drift_compare as _drift_compare
 from .. import onlife as _onlife
 from .. import pipeline_comercial as _pipeline
 from ..analisis import analizar
+from ..dictamen import generar_dictamen, generar_ranking
 from ..engine.rule_engine import RuleEngine
 from ..engine.schemas import Prospecto, SeñalCapa0
 from ..ingesta import noticias as _noticias
@@ -729,7 +730,21 @@ def investigacion_automatica(payload: InvestigacionIn,
     expedientes = exp_data.get("expedientes", [])
     etapas.append({"etapa": "expedientes", "total": len(expedientes)})
 
-    # ── Paso 5: Resumen de Centro de Inteligencia (scoring, pipeline) ──
+    # ── Paso 5: Dictamen Antropológico + Ranking TOP 10 ──
+    tiempo_total = round(time.monotonic() - t0, 1)
+    dictamen = generar_dictamen(
+        expedientes,
+        query=query_text,
+        region=payload.region,
+        vertical=detected_vertical,
+        tiempo_s=tiempo_total,
+        total_escritos=total_escritos,
+        total_vistos=total_vistos,
+        noticias_senales=noticias_senales,
+    )
+    etapas.append({"etapa": "dictamen", "hallazgos": len(dictamen["hallazgos"]),
+                   "alertas": len(dictamen["alertas"])})
+
     scoring_a = sum(1 for e in expedientes if e["scoring"] == "A")
     scoring_b = sum(1 for e in expedientes if e["scoring"] == "B")
     scoring_c = sum(1 for e in expedientes if e["scoring"] == "C")
@@ -739,10 +754,11 @@ def investigacion_automatica(payload: InvestigacionIn,
         "vertical_detectada": detected_vertical,
         "region": payload.region,
         "parcial": parcial,
-        "tiempo_s": round(time.monotonic() - t0, 1),
+        "tiempo_s": tiempo_total,
         "total_escritos": total_escritos,
         "total_vistos": total_vistos,
         "noticias_senales": noticias_senales,
+        "dictamen": dictamen,
         "expedientes": {
             "total": len(expedientes),
             "scoring": {"A": scoring_a, "B": scoring_b, "C": scoring_c},
@@ -1982,6 +1998,211 @@ def dolormap(org_nombre: str) -> dict:
     }
 
 
+# --- Dossier de Inteligencia (reporte HTML imprimible por organización) --------
+
+@app.get("/dossier/{org_nombre}")
+def dossier_org(org_nombre: str) -> HTMLResponse:
+    """Dossier de inteligencia completo para una organización.
+
+    Consolida todas las capas (evidencias, drift, onlife, pipeline, análisis)
+    en un documento HTML imprimible como PDF. Listo para reunión.
+    """
+    data = dolormap(org_nombre)
+    nombre = data["org_nombre"]
+    a = data
+
+    html = f"""<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dossier · {_esc(nombre)}</title>
+<style>
+  @media print {{ @page {{ margin: 1.5cm; }} }}
+  :root {{ color-scheme: light; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 2rem;
+         max-width: 800px; margin-inline: auto; line-height: 1.5; color: #1a1a1a; }}
+  h1 {{ font-size: 1.5rem; margin: 0 0 .3rem; border-bottom: 3px solid #2563eb; padding-bottom: .3rem; }}
+  h2 {{ font-size: 1.1rem; margin: 1.5rem 0 .4rem; color: #2563eb; }}
+  h3 {{ font-size: .95rem; margin: 1rem 0 .3rem; }}
+  .sub {{ opacity: .7; font-size: .85rem; margin: .2rem 0 1.2rem; }}
+  .badge {{ display: inline-block; padding: .2rem .5rem; border-radius: .3rem; font-size: .8rem; font-weight: 700; }}
+  .badge-a {{ background: #dc2626; color: #fff; }}
+  .badge-b {{ background: #f59e0b; color: #000; }}
+  .badge-c {{ background: #6b7280; color: #fff; }}
+  .badge-icp {{ background: #dbeafe; color: #2563eb; }}
+  .meta {{ font-size: .82rem; opacity: .7; }}
+  .section {{ border: 1px solid #e5e7eb; border-radius: .5rem; padding: .8rem; margin: .6rem 0; }}
+  .section-purple {{ border-left: 4px solid #7c3aed; }}
+  .section-red {{ border-left: 4px solid #dc2626; }}
+  .section-blue {{ border-left: 4px solid #2563eb; }}
+  .section-green {{ border-left: 4px solid #16a34a; }}
+  .ev {{ border-left: 2px solid #d1d5db; padding: .3rem .5rem; margin: .4rem 0; font-size: .85rem; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: .85rem; }}
+  th, td {{ text-align: left; padding: .4rem .5rem; border-bottom: 1px solid #e5e7eb; }}
+  th {{ font-weight: 600; }}
+  .footer {{ margin-top: 2rem; padding-top: .5rem; border-top: 1px solid #e5e7eb;
+             font-size: .78rem; opacity: .6; text-align: center; }}
+</style></head><body>
+<h1>Dossier de Inteligencia · {_esc(nombre)}</h1>
+<div class="sub">Generado por hd-prospector · Radar de Inteligencia Antropológica · {ahora_iso()[:16].replace('T', ' ')}</div>
+
+<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:1rem">
+  <span class="badge badge-{a['scoring'].lower()}">{a['scoring']}</span>
+  <span class="badge badge-icp">ICP {a['score_icp']}</span>
+  <span class="badge" style="background:#f3e8ff;color:#7c3aed">{_esc(a['intensidad'])}</span>
+  {('<span class="badge" style="background:#f0fdf4;color:#16a34a">' + _esc(a['pipeline']['etapa_label']) + '</span>') if a['pipeline'].get('etapa_label') else ''}
+</div>
+"""
+
+    # Dolor Cultural
+    if a.get("tipo_deuda"):
+        html += f"""<div class="section section-purple">
+<h2>Dolor Cultural™</h2>
+<h3>{_esc(a['tipo_deuda'])}</h3>
+<p>{_esc(a['deuda_razon'])}</p>
+{('<p class="meta">Deuda secundaria: ' + _esc(a['deuda_secundaria']) + '</p>') if a.get('deuda_secundaria') else ''}
+<p><b>Ángulo de conversación:</b> {_esc(a['angulo_conversacion'])}</p>
+<p><b>Decisor sugerido:</b> {_esc(a['decisor_sugerido'])}</p>
+<p><b>Señal dominante:</b> {_esc(a['senal_dominante'])}</p>
+</div>"""
+
+    # Patrones
+    if a.get("patrones"):
+        html += '<div class="section section-red"><h2>Patrones detectados</h2>'
+        for p in a["patrones"]:
+            html += f'<div class="ev"><b>{_esc(p["patron"])}</b><br><span class="meta">{_esc(p["razonamiento"])}</span></div>'
+        html += '</div>'
+
+    # Keywords
+    if a.get("keywords"):
+        html += '<div class="section"><h2>Señales clave</h2><p>'
+        html += ' · '.join(f'<b>{_esc(k)}</b>' for k in a["keywords"])
+        html += '</p></div>'
+
+    # Preguntas antropológicas
+    preguntas = _preguntas_antropologicas(a)
+    html += '<div class="section section-blue"><h2>Preguntas antropológicas para la reunión</h2><ol>'
+    for p in preguntas:
+        html += f'<li>{_esc(p)}</li>'
+    html += '</ol></div>'
+
+    # Evidencias
+    ev_data = a.get("evidencias", {})
+    html += f'<div class="section"><h2>Evidencias ({ev_data.get("total", 0)})</h2>'
+    for ev in ev_data.get("items", [])[:15]:
+        fecha = (ev.get("creado_en") or "")[:10]
+        html += f'<div class="ev">{_esc((ev.get("cita_textual") or "")[:200])}<br><span class="meta">{_esc(ev.get("nombre_medio", ""))} · {fecha}</span></div>'
+    html += '</div>'
+
+    # Drift
+    drift = a.get("drift", {})
+    if drift.get("total_evidencias", 0) > 0:
+        html += f'<div class="section section-purple"><h2>Drift Narrativo ({drift["total_evidencias"]} cambios)</h2>'
+        ICONOS = {"posicionamiento": "Posicionamiento", "audiencia": "Audiencia",
+                  "lenguaje": "Lenguaje", "identidad": "Identidad",
+                  "concepto_nuevo": "Concepto nuevo", "concepto_eliminado": "Concepto eliminado",
+                  "contradiccion": "Contradicción", "cambio_ontologico": "Cambio ontológico"}
+        for dev in drift.get("evidencias", []):
+            tc = ICONOS.get(dev.get("tipo_cambio", ""), dev.get("tipo_cambio", ""))
+            html += f'<div class="ev"><b>{_esc(tc)}</b> ({_esc(dev.get("tipo_pagina", ""))})<br><span class="meta">{_esc(dev.get("descripcion", ""))}</span></div>'
+        html += '</div>'
+
+    # Onlife
+    onlife = a.get("onlife", {})
+    if onlife.get("total_señales", 0) > 0:
+        html += f'<div class="section section-green"><h2>Señales Onlife ({onlife["total_señales"]})</h2>'
+        for s in onlife.get("señales", []):
+            html += f'<div class="ev"><b>{_esc(s.get("tipo_senal", ""))}</b> ({_esc(s.get("fuente", ""))})<br><span class="meta">{_esc(s.get("descripcion", ""))}</span></div>'
+        html += '</div>'
+
+    # Pipeline
+    pipe = a.get("pipeline", {})
+    if pipe.get("etapa"):
+        html += f'<div class="section"><h2>Pipeline Comercial</h2>'
+        html += f'<p>Etapa actual: <b>{_esc(pipe["etapa_label"])}</b></p>'
+        if pipe.get("transiciones"):
+            html += '<table><tr><th>Etapa</th><th>Fecha</th><th>Notas</th></tr>'
+            for t in pipe["transiciones"]:
+                html += f'<tr><td>{_esc(t.get("etapa", ""))}</td><td>{_esc((t.get("fecha", ""))[:16])}</td><td>{_esc(t.get("notas", ""))}</td></tr>'
+            html += '</table>'
+        html += '</div>'
+
+    # Footer
+    html += f"""
+<div class="footer">
+  Dossier generado por hd-prospector · Radar de Inteligencia Antropológica<br>
+  Hamaca Digital · {ahora_iso()[:10]}
+</div>
+</body></html>"""
+
+    return HTMLResponse(html)
+
+
+def _esc(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _preguntas_antropologicas(data: dict) -> list[str]:
+    """Genera preguntas para reunión basadas en el perfil de la organización."""
+    preguntas = []
+    deuda = data.get("tipo_deuda", "")
+    senal = data.get("senal_dominante", "")
+
+    if "Relacional" in deuda:
+        preguntas.append("¿Qué historia cuenta el cliente que se fue? ¿Qué se rompió antes del churn?")
+        preguntas.append("¿Tienen un mapa de la experiencia emocional del cliente, no solo del journey funcional?")
+    elif "Moral" in deuda:
+        preguntas.append("¿Qué narrativa quedó en el equipo después de los recortes? ¿Miedo, alivio, confusión?")
+        preguntas.append("¿Cómo se comunicó la decisión internamente? ¿Hubo espacio para procesar?")
+    elif "Estructural" in deuda:
+        preguntas.append("¿Qué promesa dejó de sostener la operación? ¿Cuándo lo notaron?")
+        preguntas.append("¿El modelo operativo actual fue diseñado para la escala en la que están?")
+    elif "Gobernanza" in deuda:
+        preguntas.append("¿La cultura de cumplimiento va al ritmo del negocio o detrás?")
+        preguntas.append("¿Los equipos sienten que el compliance es un aliado o un freno?")
+    elif "Liderazgo" in deuda:
+        preguntas.append("¿Qué relato necesita la nueva dirección para alinear al equipo?")
+        preguntas.append("¿Hay claridad sobre qué se conserva y qué cambia con la transición?")
+    elif "Onboarding" in deuda:
+        preguntas.append("¿Cómo transmiten la cultura a las personas nuevas? ¿Hay un rito de paso?")
+        preguntas.append("¿La velocidad de contratación está alineada con la capacidad de integración?")
+    elif "Escalamiento" in deuda:
+        preguntas.append("¿Qué se está estirando más allá de su límite sano? ¿Procesos, cultura, personas?")
+        preguntas.append("¿La presión de crecer viene de adentro o del capital?")
+    elif "Integración" in deuda:
+        preguntas.append("¿Qué identidad común hace falta construir entre las organizaciones que se fusionan?")
+        preguntas.append("¿Qué narrativas compiten internamente? ¿Hay un 'nosotros' o siguen siendo 'ellos y nosotros'?")
+    else:
+        preguntas.append("¿Cuál es la tensión principal que sienten hoy como organización?")
+        preguntas.append("¿Hay algo que los datos no les expliquen sobre su situación actual?")
+
+    if "friccion_retencion" in (senal or ""):
+        preguntas.append("¿Cuántos clientes perdieron en el último trimestre? ¿Saben por qué se fueron?")
+    if "ronda_inversion" in (senal or ""):
+        preguntas.append("¿El capital nuevo viene con expectativas de crecimiento que la cultura puede sostener?")
+    if "cambio_liderazgo" in (senal or ""):
+        preguntas.append("¿La transición de liderazgo fue planificada o reactiva?")
+
+    preguntas.append("¿Qué harían distinto si pudieran ver lo que su organización no puede ver de sí misma?")
+
+    return preguntas[:6]
+
+
+# --- Alertas de Inteligencia --------------------------------------------------
+
+@app.get("/alertas")
+def alertas_inteligencia() -> dict:
+    """Alertas inteligentes: organizaciones que merecen atención inmediata."""
+    exp_data = _construir_expedientes(None, limite=100)
+    expedientes = exp_data.get("expedientes", [])
+    from ..dictamen import _generar_alertas
+    alertas = _generar_alertas(expedientes)
+    return {
+        "total": len(alertas),
+        "alertas": alertas,
+    }
+
+
 # --- Capa 9: Pipeline Comercial (endpoints) ----------------------------------
 
 
@@ -2143,6 +2364,28 @@ _ADMIN_HTML = """<!doctype html>
   .stage.done .dot { background: #16a34a; }
   @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.5); } }
   .inv-resumen { border: 1px solid rgba(22,163,74,.3); border-left: 4px solid #16a34a; border-radius: .5rem; padding: .7rem .8rem; margin-top: .6rem; }
+  /* Dictamen Antropológico */
+  .dictamen { margin-top: 1rem; }
+  .dictamen-seccion { border: 1px solid rgba(128,128,128,.2); border-radius: .6rem; padding: .7rem .8rem; margin-top: .7rem; }
+  .dictamen-seccion h3 { font-size: .95rem; margin: 0 0 .4rem; }
+  .dictamen-hipotesis { background: rgba(168,85,247,.06); border-color: rgba(168,85,247,.25); }
+  .dictamen-hipotesis .confianza { display: inline-block; padding: .15rem .4rem; border-radius: .3rem; font-size: .75rem; font-weight: 700; }
+  .confianza-alta { background: #16a34a; color: #fff; }
+  .confianza-media { background: #f59e0b; color: #000; }
+  .confianza-baja { background: #6b7280; color: #fff; }
+  .dictamen-ranking { border-color: rgba(37,99,235,.25); }
+  .ranking-item { display: flex; gap: .5rem; align-items: flex-start; padding: .5rem 0; border-bottom: 1px solid rgba(128,128,128,.1); }
+  .ranking-item:last-child { border-bottom: 0; }
+  .ranking-pos { font-size: 1.3rem; font-weight: 800; color: #2563eb; min-width: 1.8rem; text-align: center; }
+  .ranking-body { flex: 1; }
+  .ranking-body .org-name { font-weight: 700; font-size: .95rem; }
+  .ranking-motivos { font-size: .78rem; opacity: .7; margin-top: .15rem; }
+  .dictamen-alertas { border-color: rgba(220,38,38,.25); background: rgba(220,38,38,.03); }
+  .alerta-item { padding: .4rem 0; border-bottom: 1px solid rgba(220,38,38,.1); font-size: .85rem; }
+  .alerta-item:last-child { border-bottom: 0; }
+  .hallazgo-item { padding: .35rem 0; border-bottom: 1px solid rgba(128,128,128,.1); font-size: .85rem; }
+  .hallazgo-item:last-child { border-bottom: 0; }
+  .dossier-link { text-decoration: none; color: #7c3aed; font-weight: 600; font-size: .8rem; }
 </style></head><body>
 <h1>hd-prospector · Radar de Inteligencia Antropológica</h1>
 <p class="sub">① Un clic = investigación completa (4 ecosistemas × 6 señales × noticias) → ② <b>Expedientes Vivos</b> con <b>patrones</b>, <b>Dolor Cultural™</b> y <b>scoring A/B/C</b> → ③ auto-investiga y guarda prospecto. Internet → Evidencia → Patrón → Dolor → Prospecto.</p>
@@ -2491,6 +2734,104 @@ _ADMIN_HTML = """<!doctype html>
       return '<div class="' + cls + '"><span class="dot"></span> ' + ic + ' ' + esc(s) + '</div>';
     }).join("");
   }
+  function renderDictamen(d) {
+    const dict = d.dictamen || {};
+    const re = dict.resumen_ejecutivo || {};
+    const sc = re.scoring || {};
+    const exp = d.expedientes || {};
+    let h = '<div class="dictamen">';
+
+    // Resumen Ejecutivo
+    h += '<div class="dictamen-seccion inv-resumen">';
+    h += '<h3>Resumen Ejecutivo</h3>';
+    h += '<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">';
+    h += '<span class="chip">' + (re.organizaciones_analizadas || exp.total || 0) + ' organizaciones</span>';
+    h += '<span class="chip">' + (re.evidencias_procesadas || 0) + ' evidencias</span>';
+    if (sc.A) h += '<span class="badge badge-a">A: ' + sc.A + '</span>';
+    if (sc.B) h += '<span class="badge badge-b">B: ' + sc.B + '</span>';
+    if (sc.C) h += '<span class="badge badge-c">C: ' + sc.C + '</span>';
+    if (re.senales_rss) h += '<span class="chip">' + re.senales_rss + ' RSS</span>';
+    h += '<span class="chip">' + esc(d.vertical_detectada || re.vertical || '') + '</span>';
+    h += '<span class="chip">' + esc(d.region || re.region || '') + '</span>';
+    h += '</div></div>';
+
+    // Hipótesis central
+    const hip = dict.hipotesis || {};
+    if (hip.texto) {
+      const ccls = hip.confianza === 'alta' ? 'confianza-alta' : hip.confianza === 'media' ? 'confianza-media' : 'confianza-baja';
+      h += '<div class="dictamen-seccion dictamen-hipotesis">';
+      h += '<h3>Hipótesis Central <span class="confianza ' + ccls + '">' + esc(hip.confianza || '') + '</span></h3>';
+      h += '<div style="font-size:.9rem;margin-bottom:.3rem">' + esc(hip.texto) + '</div>';
+      if (hip.deuda_dominante) h += '<div style="font-size:.82rem;opacity:.7">Deuda dominante: <b>' + esc(hip.deuda_dominante) + '</b></div>';
+      if (hip.angulo) h += '<div class="angulo" style="margin-top:.3rem">💬 ' + esc(hip.angulo) + '</div>';
+      if (hip.distribucion) {
+        const dd = Object.entries(hip.distribucion);
+        if (dd.length > 1) {
+          h += '<div style="font-size:.78rem;opacity:.6;margin-top:.3rem">Distribución: ' + dd.map(function(x){return esc(x[0]) + ' (' + x[1] + ')';}).join(', ') + '</div>';
+        }
+      }
+      h += '</div>';
+    }
+
+    // Hallazgos
+    const hall = dict.hallazgos || [];
+    if (hall.length) {
+      h += '<div class="dictamen-seccion">';
+      h += '<h3>Hallazgos Ecosistémicos</h3>';
+      h += hall.map(function(x) { return '<div class="hallazgo-item">' + esc(x.hallazgo) + '</div>'; }).join('');
+      h += '</div>';
+    }
+
+    // Ranking TOP 10
+    const rank = dict.ranking || [];
+    if (rank.length) {
+      h += '<div class="dictamen-seccion dictamen-ranking">';
+      h += '<h3>Ranking TOP ' + rank.length + '</h3>';
+      h += rank.map(function(r) {
+        const bcls = r.scoring === 'A' ? 'badge-a' : r.scoring === 'B' ? 'badge-b' : 'badge-c';
+        return '<div class="ranking-item">' +
+          '<div class="ranking-pos">' + r.posicion + '</div>' +
+          '<div class="ranking-body">' +
+            '<div><span class="org-name">' + esc(r.nombre) + '</span> ' +
+              '<span class="badge ' + bcls + '">' + r.scoring + '</span> ' +
+              '<span class="badge badge-icp">ICP ' + r.score_icp + '</span>' +
+              (r.tipo_deuda ? ' <span class="badge badge-deuda">' + esc(r.tipo_deuda) + '</span>' : '') +
+              ' <a class="dossier-link" href="/dossier/' + encodeURIComponent(r.nombre) + '" target="_blank">Dossier ↗</a>' +
+            '</div>' +
+            (r.motivos && r.motivos.length ? '<div class="ranking-motivos">' + r.motivos.map(function(m){return esc(m);}).join(' · ') + '</div>' : '') +
+            (r.angulo_conversacion ? '<div class="angulo" style="margin-top:.2rem;font-size:.78rem">💬 ' + esc(r.angulo_conversacion) + '</div>' : '') +
+          '</div></div>';
+      }).join('');
+      h += '</div>';
+    }
+
+    // Alertas
+    const alertas = dict.alertas || [];
+    if (alertas.length) {
+      h += '<div class="dictamen-seccion dictamen-alertas">';
+      h += '<h3>⚠️ Alertas (' + alertas.length + ')</h3>';
+      h += alertas.map(function(a) {
+        return '<div class="alerta-item"><b>' + esc(a.nombre) + '</b> ' +
+          '<span class="badge badge-' + (a.scoring||'c').toLowerCase() + '">' + esc(a.scoring||'') + '</span> ' +
+          (a.tipo_deuda ? '<span class="badge badge-deuda">' + esc(a.tipo_deuda) + '</span> ' : '') +
+          '<div class="hint">' + (a.razones||[]).map(function(r){return esc(r);}).join(' · ') + '</div>' +
+          '<div style="font-size:.78rem;color:#2563eb">' + esc(a.accion_sugerida||'') + '</div>' +
+        '</div>';
+      }).join('');
+      h += '</div>';
+    }
+
+    // Etapas (colapsado)
+    if (d.etapas && d.etapas.length) {
+      h += '<details style="margin:.6rem 0 0"><summary style="cursor:pointer;font-size:.82rem;opacity:.5">Detalle por etapa</summary>';
+      h += d.etapas.map(function(e) { return '<div class="hint">' + esc(e.etapa) + ': ' + (e.escritos !== undefined ? e.escritos + ' escritos, ' + e.vistos + ' vistos' : e.senales !== undefined ? e.senales + ' señales' : e.total !== undefined ? e.total + ' expedientes' : e.hallazgos !== undefined ? e.hallazgos + ' hallazgos, ' + e.alertas + ' alertas' : '') + '</div>'; }).join('');
+      h += '</details>';
+    }
+
+    h += '</div>';
+    return h;
+  }
+
   $("inv_btn").addEventListener("click", async () => {
     const query = $("inv_query").value.trim();
     const m = $("inv_msg"), token = tok(), resultado = $("inv_resultado");
@@ -2518,25 +2859,7 @@ _ADMIN_HTML = """<!doctype html>
       const nota = d.parcial ? " (parcial: se agotó el presupuesto de tiempo)" : "";
       m.className = "msg ok";
       m.textContent = "✓ Investigación completa en " + d.tiempo_s + "s · " + d.total_escritos + " evidencias nuevas · " + d.total_vistos + " titulares · " + d.noticias_senales + " señales RSS" + nota;
-      const exp = d.expedientes || {};
-      const sc = exp.scoring || {};
-      let html = '<div class="inv-resumen">';
-      html += '<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">';
-      html += '<b>🚀 Resultado</b>';
-      html += '<span class="chip">' + (exp.total || 0) + ' organizaciones</span>';
-      if (sc.A) html += '<span class="badge badge-a">A: ' + sc.A + '</span>';
-      if (sc.B) html += '<span class="badge badge-b">B: ' + sc.B + '</span>';
-      if (sc.C) html += '<span class="badge badge-c">C: ' + sc.C + '</span>';
-      html += '<span class="chip">' + esc(d.vertical_detectada) + '</span>';
-      html += '<span class="chip">' + esc(d.region) + '</span>';
-      html += '</div>';
-      if (d.etapas && d.etapas.length) {
-        html += '<details style="margin:.4rem 0 0"><summary style="cursor:pointer;font-size:.82rem;opacity:.7">Detalle por etapa</summary>';
-        html += d.etapas.map(function(e) { return '<div class="hint">' + esc(e.etapa) + ': ' + (e.escritos !== undefined ? e.escritos + ' escritos, ' + e.vistos + ' vistos' : e.senales !== undefined ? e.senales + ' señales' : e.total !== undefined ? e.total + ' expedientes' : '') + '</div>'; }).join("");
-        html += '</details>';
-      }
-      html += '</div>';
-      resultado.innerHTML = html;
+      resultado.innerHTML = renderDictamen(d);
       cargarExpedientes({});
     } catch (e) { clearInterval(si); m.className = "msg err"; m.textContent = "Error de red: " + e; }
     finally { document.querySelectorAll("button").forEach(b => b.disabled = false); }
@@ -2668,6 +2991,7 @@ _ADMIN_HTML = """<!doctype html>
             <button class="sec" onclick="observarOnlifeDesdeExp(this)" data-org="${esc(e.nombre)}">🔬 Onlife</button>
             <button class="sec" onclick="registrarPipelineDesdeExp(this)" data-org="${esc(e.nombre)}">📋 Pipeline</button>
             <button class="sec" onclick="verDolorMapDesdeExp(this)" data-org="${esc(e.nombre)}">🗺️ DolorMap</button>
+            <a class="sec dossier-link" href="/dossier/${encodeURIComponent(e.nombre)}" target="_blank" rel="noopener">📄 Dossier</a>
             ${e.linkedin ? '<a class="sec" href="' + esc(safeUrl(e.linkedin)) + '" target="_blank" rel="noopener">LinkedIn ↗</a>' : ""}
             ${e.contacto && e.contacto.dominio ? '<button class="sec" onclick="verificarCorreo(this)" data-dom="' + esc(e.contacto.dominio) + '">✓ Verificar correo</button> <span class="vres"></span>' : ""}
           </div>
