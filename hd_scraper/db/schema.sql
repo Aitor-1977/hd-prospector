@@ -204,3 +204,27 @@ CREATE TABLE IF NOT EXISTS drift_evidencias (
 
 CREATE INDEX IF NOT EXISTS idx_drift_ev_org  ON drift_evidencias (org_nombre);
 CREATE INDEX IF NOT EXISTS idx_drift_ev_tipo ON drift_evidencias (tipo_cambio);
+
+-- =========================================================================
+-- Capa 7 — Motor Onlife
+-- Señales conductuales observadas en espacios digitales donde la vida
+-- organizacional realmente ocurre (repos, foros, changelogs, comunidades).
+-- Cada señal es un HECHO verificable con URL fuente. No interpreta.
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS onlife_signals (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_nombre          TEXT NOT NULL,
+    fuente              TEXT NOT NULL,       -- github|hackernews|blog_changelog
+    tipo_senal          TEXT NOT NULL,       -- actividad_tech|lanzamiento|comunidad|contratacion|presencia
+    dato_json           TEXT NOT NULL,       -- observación estructurada (JSON)
+    url                 TEXT,
+    descripcion         TEXT NOT NULL,       -- descripción legible del hecho observado
+    fecha_observacion   TEXT NOT NULL,       -- ISO 8601
+    hash_dedup          TEXT NOT NULL UNIQUE,
+    creado_en           TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_onlife_org    ON onlife_signals (org_nombre);
+CREATE INDEX IF NOT EXISTS idx_onlife_fuente ON onlife_signals (fuente);
+CREATE INDEX IF NOT EXISTS idx_onlife_tipo   ON onlife_signals (tipo_senal);

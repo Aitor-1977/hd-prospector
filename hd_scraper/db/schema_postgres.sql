@@ -190,3 +190,21 @@ CREATE TABLE IF NOT EXISTS drift_evidencias (
 
 CREATE INDEX IF NOT EXISTS idx_drift_ev_org  ON drift_evidencias (org_nombre);
 CREATE INDEX IF NOT EXISTS idx_drift_ev_tipo ON drift_evidencias (tipo_cambio);
+
+-- Capa 7 — Motor Onlife
+CREATE TABLE IF NOT EXISTS onlife_signals (
+    id                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    org_nombre          TEXT NOT NULL,
+    fuente              TEXT NOT NULL,
+    tipo_senal          TEXT NOT NULL,
+    dato_json           TEXT NOT NULL,
+    url                 TEXT,
+    descripcion         TEXT NOT NULL,
+    fecha_observacion   TEXT NOT NULL,
+    hash_dedup          TEXT NOT NULL UNIQUE,
+    creado_en           TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_onlife_org    ON onlife_signals (org_nombre);
+CREATE INDEX IF NOT EXISTS idx_onlife_fuente ON onlife_signals (fuente);
+CREATE INDEX IF NOT EXISTS idx_onlife_tipo   ON onlife_signals (tipo_senal);

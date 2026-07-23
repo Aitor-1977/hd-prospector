@@ -32,6 +32,7 @@ import httpx
 from .. import directorio, hunter
 from .. import drift as _drift
 from .. import drift_compare as _drift_compare
+from .. import onlife as _onlife
 from ..analisis import analizar
 from ..engine.rule_engine import RuleEngine
 from ..engine.schemas import Prospecto, SeñalCapa0
@@ -1510,6 +1511,59 @@ def drift_timeline(org_nombre: str) -> dict:
     return _drift.obtener_timeline(org_nombre)
 
 
+# --- Capa 7: Motor Onlife (endpoints) ----------------------------------------
+
+
+class OnlifeObservarIn(BaseModel):
+    org_nombre: str
+    org_github: Optional[str] = None
+    feed_url: Optional[str] = None
+
+
+@app.post("/onlife/observar")
+def onlife_observar(payload: OnlifeObservarIn,
+                    x_ingest_token: Optional[str] = Header(None)) -> dict:
+    """Observa comportamiento organizacional en espacios digitales.
+
+    Recorre fuentes onlife (GitHub, Hacker News, blog/changelog) y registra
+    señales conductuales. Autenticado (escribe).
+    """
+    _exigir_token(x_ingest_token)
+    nombre = payload.org_nombre.strip()
+    if not nombre:
+        raise HTTPException(400, "org_nombre vacío")
+
+    with httpx.Client(timeout=settings.request_timeout_s,
+                      headers={"User-Agent": settings.user_agent},
+                      follow_redirects=True) as client:
+        def http_get(url: str) -> str:
+            r = client.get(url)
+            r.raise_for_status()
+            return r.text
+
+        señales = _onlife.observar(
+            nombre, http_get,
+            org_github=payload.org_github.strip() if payload.org_github else None,
+            feed_url=payload.feed_url.strip() if payload.feed_url else None,
+        )
+
+    nuevas = _onlife.persistir_señales(señales) if señales else 0
+
+    return {
+        "org_nombre": nombre,
+        "total_señales": len(señales),
+        "señales_nuevas": nuevas,
+        "fuentes": list({s["fuente"] for s in señales}),
+        "señales": señales,
+    }
+
+
+@app.get("/onlife/{org_nombre}")
+def onlife_perfil(org_nombre: str) -> dict:
+    """Perfil onlife completo de una organización. Lectura pública."""
+    return _onlife.obtener_perfil(org_nombre)
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_form() -> str:
     """Pantalla de descubrimiento (scraping) y alta de prospectos (PWA instalable)."""
@@ -1710,6 +1764,24 @@ _ADMIN_HTML = """<!doctype html>
   </div>
   <div class=”msg” id=”drift_msg”></div>
   <div id=”drift_timeline”></div>
+</section>
+
+<section>
+  <h2>⑦ Motor Onlife</h2>
+  <div class=”hint”>Observa <b>comportamiento</b> organizacional donde realmente ocurre: repositorios, foros técnicos, changelogs. No observa discurso (eso es Drift) — observa <b>acción</b>.</div>
+  <div class=”row”>
+    <input id=”onlife_org” placeholder=”Nombre de la organización”>
+    <input id=”onlife_github” placeholder=”Org/user en GitHub (opcional)”>
+  </div>
+  <div class=”row” style=”margin-top:.4rem”>
+    <input id=”onlife_feed” placeholder=”URL del blog/changelog RSS (opcional)” style=”flex:2”>
+  </div>
+  <div class=”row” style=”margin-top:.4rem”>
+    <button id=”onlife_observar” class=”sec”>🔬 Observar</button>
+    <button id=”onlife_ver” class=”sec”>👁️ Ver perfil</button>
+  </div>
+  <div class=”msg” id=”onlife_msg”></div>
+  <div id=”onlife_perfil”></div>
 </section>
 
 <section>
@@ -1965,6 +2037,7 @@ _ADMIN_HTML = """<!doctype html>
           <div class="exp-actions">
             <button class="sec" onclick="prefill(this.dataset.n)" data-n="${esc(e.nombre)}">➕ Guardar y auto-investigar</button>
             <button class="sec" onclick="capturarDriftDesdeExp(this)" data-org="${esc(e.nombre)}">📡 Drift</button>
+            <button class="sec" onclick="observarOnlifeDesdeExp(this)" data-org="${esc(e.nombre)}">🔬 Onlife</button>
             ${e.linkedin ? '<a class="sec" href="' + esc(safeUrl(e.linkedin)) + '" target="_blank" rel="noopener">LinkedIn ↗</a>' : ""}
             ${e.contacto && e.contacto.dominio ? '<button class="sec" onclick="verificarCorreo(this)" data-dom="' + esc(e.contacto.dominio) + '">✓ Verificar correo</button> <span class="vres"></span>' : ""}
           </div>
@@ -2049,6 +2122,70 @@ _ADMIN_HTML = """<!doctype html>
         ).join("");
       }
 
+      cont.innerHTML = html;
+    } catch (e) { cont.innerHTML = '<div class="hint">Error: ' + esc(String(e)) + '</div>'; }
+  }
+
+  // ⑦ Motor Onlife
+  window.observarOnlifeDesdeExp = (btn) => {
+    const org = btn.dataset.org || "";
+    $("onlife_org").value = org;
+    $("onlife_org").scrollIntoView({ behavior: "smooth" });
+  };
+
+  $("onlife_observar").addEventListener("click", async () => {
+    const m = $("onlife_msg"), token = tok();
+    const org = $("onlife_org").value.trim();
+    const gh = $("onlife_github").value.trim();
+    const feed = $("onlife_feed").value.trim();
+    if (!token) { m.className = "msg err"; m.style.display = "block"; m.textContent = "Falta el token."; return; }
+    if (!org) { m.className = "msg err"; m.style.display = "block"; m.textContent = "Escribe el nombre de la organización."; return; }
+    $("onlife_observar").disabled = true;
+    m.className = "msg"; m.style.display = "block"; m.textContent = "Observando " + org + "…";
+    try {
+      const body = { org_nombre: org };
+      if (gh) body.org_github = gh;
+      if (feed) body.feed_url = feed;
+      const r = await fetch("/onlife/observar", { method: "POST",
+        headers: { "Content-Type": "application/json", "X-Ingest-Token": token },
+        body: JSON.stringify(body) });
+      const o = await leerJson(r);
+      if (!o.ok) { m.className = "msg err"; m.textContent = "Error: " + (o.error || (o.data && o.data.detail) || r.status); return; }
+      const d = o.data;
+      m.className = "msg ok";
+      m.textContent = "✓ " + d.total_señales + " señal(es) observada(s), " + d.señales_nuevas + " nueva(s). Fuentes: " + (d.fuentes||[]).join(", ");
+      cargarOnlifePerfil(org);
+    } catch (e) { m.className = "msg err"; m.textContent = "Error de red: " + e; }
+    finally { $("onlife_observar").disabled = false; }
+  });
+
+  $("onlife_ver").addEventListener("click", () => {
+    const org = $("onlife_org").value.trim();
+    if (!org) { const m = $("onlife_msg"); m.className = "msg err"; m.style.display = "block"; m.textContent = "Escribe el nombre de la organización."; return; }
+    cargarOnlifePerfil(org);
+  });
+
+  async function cargarOnlifePerfil(org) {
+    const cont = $("onlife_perfil");
+    cont.innerHTML = '<div class="hint">Cargando…</div>';
+    try {
+      const d = await (await fetch("/onlife/" + encodeURIComponent(org))).json();
+      if (!d.total_señales) {
+        cont.innerHTML = '<div class="hint">Sin señales onlife para ' + esc(org) + '. Observa primero.</div>';
+        return;
+      }
+      const ICONOS_F = {github:"🐙",hackernews:"🟠",blog_changelog:"📝"};
+      const ICONOS_T = {actividad_tech:"⚙️",lanzamiento:"🚀",comunidad:"💬",contratacion:"👔",presencia:"📢"};
+      let html = '<div style="margin-top:.5rem"><b>' + esc(org) + '</b> — ' + d.total_señales + ' señal(es) · Fuentes: ' + d.fuentes_observadas.map(f => (ICONOS_F[f]||"📋") + " " + esc(f)).join(", ") + '</div>';
+      html += d.señales.map(s => {
+        const ic = ICONOS_T[s.tipo_senal] || "📋";
+        const icf = ICONOS_F[s.fuente] || "📋";
+        return '<div class="card">' +
+          '<div>' + ic + ' <b>' + esc(s.tipo_senal) + '</b> ' + icf + ' <span class="chip">' + esc(s.fuente) + '</span> <span class="meta">' + esc((s.fecha_observacion||"").slice(0,16).replace("T"," ")) + '</span></div>' +
+          '<div class="meta">' + esc(s.descripcion) + '</div>' +
+          (s.url ? '<div class="meta"><a href="' + esc(safeUrl(s.url)) + '" target="_blank" rel="noopener">' + esc(s.url.slice(0,80)) + '</a></div>' : '') +
+        '</div>';
+      }).join("");
       cont.innerHTML = html;
     } catch (e) { cont.innerHTML = '<div class="hint">Error: ' + esc(String(e)) + '</div>'; }
   }
