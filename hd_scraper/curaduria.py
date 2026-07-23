@@ -481,10 +481,75 @@ def _siguiente_paso(
     return "Ampliar la captura de evidencia antes de formular hipótesis."
 
 
+def _viabilidad_candidato(e: dict) -> dict:
+    """Evalúa la viabilidad del candidato para el laboratorio HD."""
+    viab = e.get("viabilidad", "")
+    profundidad = e.get("profundidad_dolor", 0)
+    scoring = e.get("scoring", "C")
+    deuda = e.get("tipo_deuda", "")
+
+    if not viab:
+        if scoring == "A" and deuda:
+            viab = "alta" if profundidad >= 50 else "media"
+        elif scoring == "B":
+            viab = "media" if deuda else "baja"
+        else:
+            viab = "baja"
+
+    if viab == "alta":
+        razon = ("Candidato viable: señales de dolor estructural con "
+                 "profundidad suficiente para justificar investigación onlife.")
+    elif viab == "media":
+        razon = ("Candidato en observación: hay indicios pero se necesita "
+                 "convergencia con más fuentes antes de escalar.")
+    elif viab == "baja":
+        razon = ("Candidato preliminar: la señal existe pero es insuficiente "
+                 "para formular una hipótesis sólida de fricción estructural.")
+    else:
+        razon = ("No viable: la evidencia no muestra indicios de fricción "
+                 "estructural relevante para el laboratorio.")
+
+    return {"nivel": viab, "razon": razon, "profundidad": profundidad}
+
+
+def _evidencia_curada(e: dict) -> dict:
+    """Separa la evidencia narrativa del ruido: qué es hecho y qué es señal."""
+    kws = set(e.get("keywords", []))
+    dolor_kws = sorted(kws & SENALES_DOLOR)
+    cambio_kws = sorted(kws & SENALES_CAMBIO)
+    deuda = e.get("tipo_deuda", "")
+    razon = e.get("deuda_razon", "")
+
+    hechos: list[str] = []
+    if dolor_kws:
+        hechos.append(f"Señales de dolor: {', '.join(dolor_kws)}")
+    if cambio_kws:
+        hechos.append(f"Señales de cambio: {', '.join(cambio_kws)}")
+
+    hipotesis = ""
+    if deuda:
+        hipotesis = (f"Hipótesis: {deuda}. {razon}. "
+                     "Señal narrativa — requiere convergencia operativa "
+                     "para confirmación.")
+
+    return {
+        "hechos_estructurales": hechos,
+        "hipotesis_deuda": hipotesis,
+        "total_evidencias": e.get("total_evidencias", 0),
+        "intensidad": e.get("intensidad", ""),
+    }
+
+
 def _organizaciones_curadas(
     expedientes: list[dict], limite: int = 5,
 ) -> list[dict]:
-    """TOP organizaciones con lectura interpretativa (no ranking de score)."""
+    """TOP organizaciones con lectura interpretativa (no ranking de score).
+
+    Cada organización incluye:
+      1) Identificación como sujeto central
+      2) Evidencia narrativa curada (separando ruido de hecho)
+      3) Hipótesis de viabilidad del candidato para el laboratorio
+    """
     candidatas = [e for e in expedientes if e.get("scoring") in ("A", "B")]
     if not candidatas:
         candidatas = expedientes[:limite]
@@ -505,6 +570,8 @@ def _organizaciones_curadas(
             "interes": e.get("score_icp", 0),
             "total_evidencias": e.get("total_evidencias", 0),
             "lectura": _lectura_organizacion(e),
+            "evidencia_curada": _evidencia_curada(e),
+            "viabilidad_hd": _viabilidad_candidato(e),
             "angulo": e.get("angulo_conversacion", ""),
             "decisor": e.get("decisor_sugerido", ""),
             "vertical": e.get("vertical", ""),

@@ -214,6 +214,32 @@ RUIDO_MEDIATICO: tuple[str, ...] = (
     "inauguracion", "franquicia", "obituario", "esquela",
 )
 
+# Eventos que involucran a una empresa pero NO tienen profundidad estructural
+# para Thick Data. Pasan los filtros existentes (no opinión, no gigante, tienen
+# empresa) pero NO son evidencia de fricción cultural. El laboratorio descarta
+# esto ANTES de persistir: el sistema es un curador, no un recolector.
+EVENTOS_SUPERFICIALES: tuple[str, ...] = (
+    # Imagen corporativa / PR / marca — sin fricción
+    "patrocinio", "patrocina", "sponsor", "naming rights",
+    "responsabilidad social", "accion social", "voluntariado",
+    "donacion a", "dona a", "dona millones",
+    "aniversario de", "cumple anos", "celebra su aniversario",
+    # Operaciones rutinarias — sin señal estructural
+    "nueva version de", "actualizacion de", "actualiza su app",
+    "cambio de imagen", "cambio de logo", "rebranding",
+    # Eventos de industria sin impacto estructural
+    "participa en", "participara en", "asiste a", "asistira a",
+    "presenta en", "presento en", "conferencia de", "foro de",
+    "summit", "webinar", "hackathon", "meetup",
+    # Reconocimientos — positivos pero sin Thick Data
+    "mejor empresa para trabajar", "great place to work",
+    "reconocida como", "obtiene certificacion", "certificada como",
+    # Comentario de mercado sin evento estructural
+    "analistas esperan", "los expertos opinan", "valoracion de mercado",
+    "cotiza a", "sube en bolsa", "baja en bolsa", "accion de",
+    "acciones de", "precio objetivo",
+)
+
 # Título de reporte: un tema seguido de "AÑO:" (p. ej. "Venture Capital LATAM
 # 2025:"). Señal fuerte de informe, casi nunca una empresa.
 _RE_REPORTE = re.compile(r"\b20\d\d\s*:")
@@ -233,6 +259,7 @@ MOTIVO_NO_LATAM = "relevancia:no_latam"        # geografía fuera de LATAM
 MOTIVO_NO_EMPRESA = "relevancia:no_empresa"    # gobierno/premios/academia/reporte/suceso
 MOTIVO_GIGANTE = "relevancia:gigante"          # marca gigante (no es ICP de HD)
 MOTIVO_RUIDO = "relevancia:ruido_mediatico"    # deportes/espectáculos/clima/promos/aperturas
+MOTIVO_SUPERFICIAL = "relevancia:sin_profundidad_estructural"  # evento sin Thick Data
 
 
 def evaluar_relevancia(
@@ -241,20 +268,20 @@ def evaluar_relevancia(
 ) -> tuple[bool, str]:
     """Decide si un titular de descubrimiento es relevante. Determinista.
 
+    Filosofía: el sistema es un curador de Thick Data, no un recolector de
+    noticias. Filtra agresivamente buscando indicios de fricción estructural,
+    Deuda Cultural, Situacional o Simbólica.
+
     Reglas (todas deben cumplirse para CONSERVAR):
       R1  No es opinión/tendencia/listículo (marcadores léxicos).
       R2  No es geografía fuera de LATAM (España, EE.UU., …).
       R3  No es "no-empresa" (gobierno, premios, academia, reporte de mercado).
-      R4  Hay una empresa identificable (nombre propio o consulta dirigida).
-      R5  (solo si ``exigir_evento``) Hay un evento verificable en ``keywords``.
-
-    ``exigir_evento``: histórico True (solo entra la empresa CON un evento de
-    negocio). En descubrimiento por ecosistema se pasa False: una empresa real
-    en la zona correcta, que ya superó los filtros de geografía / no-empresa /
-    opinión, SE CONSERVA aunque su titular no traiga una señal fuerte. El evento
-    deja de ser un portero (mataba prospectos reales) y pasa a ser un impulsor de
-    calidad y scoring. Así el radar entrega empresas reales, no solo las que
-    justo tienen una noticia caliente.
+      R4  No es ruido mediático (deportes, espectáculos, clima, promos).
+      R5  No es marca gigante global (no es perfil HD).
+      R6  No es evento superficial sin profundidad estructural (PR, premios,
+          conferencias, movimientos bursátiles rutinarios).
+      R7  Hay una empresa identificable (nombre propio o consulta dirigida).
+      R8  (solo si ``exigir_evento``) Hay un evento verificable en ``keywords``.
 
     Devuelve ``(relevante, motivo)``. ``motivo`` vacío si es relevante.
     """
@@ -269,6 +296,8 @@ def evaluar_relevancia(
         return False, MOTIVO_RUIDO
     if _contiene(t, GIGANTES):
         return False, MOTIVO_GIGANTE
+    if _contiene(t, EVENTOS_SUPERFICIALES):
+        return False, MOTIVO_SUPERFICIAL
     if not empresa_identificada:
         return False, MOTIVO_SIN_EMPRESA
     if exigir_evento and not keywords:

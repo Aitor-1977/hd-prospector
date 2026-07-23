@@ -451,3 +451,60 @@ def test_admin_ui_incluye_curaduria(client):
     assert r.status_code == 200
     assert "renderCuraduria" in r.text
     assert "curaduria-tension" in r.text
+
+
+# ── viabilidad_hd y evidencia_curada (JSON de laboratorio) ───────────────
+
+def test_orgs_curadas_incluyen_viabilidad():
+    r = _organizaciones_curadas([_exp(scoring="A", tipo_deuda="Deuda Relacional")])
+    org = r[0]
+    assert "viabilidad_hd" in org
+    viab = org["viabilidad_hd"]
+    assert viab["nivel"] in ("alta", "media", "baja", "descartable")
+    assert viab["razon"]
+    assert "profundidad" in viab
+
+
+def test_orgs_curadas_incluyen_evidencia_curada():
+    r = _organizaciones_curadas([_exp(
+        scoring="A", tipo_deuda="Deuda Relacional",
+        keywords=["friccion_retencion", "crecimiento"],
+    )])
+    org = r[0]
+    assert "evidencia_curada" in org
+    ev = org["evidencia_curada"]
+    assert len(ev["hechos_estructurales"]) >= 1
+    assert "Hipótesis:" in ev["hipotesis_deuda"]
+    assert "convergencia" in ev["hipotesis_deuda"]
+
+
+def test_viabilidad_alta_con_dolor_y_deuda():
+    from hd_scraper.curaduria import _viabilidad_candidato
+    e = _exp(scoring="A", tipo_deuda="Deuda Relacional")
+    e["viabilidad"] = "alta"
+    e["profundidad_dolor"] = 90
+    v = _viabilidad_candidato(e)
+    assert v["nivel"] == "alta"
+    assert "viable" in v["razon"]
+
+
+def test_viabilidad_baja_sin_deuda():
+    from hd_scraper.curaduria import _viabilidad_candidato
+    e = _exp(scoring="C", tipo_deuda="")
+    v = _viabilidad_candidato(e)
+    assert v["nivel"] == "baja"
+
+
+def test_evidencia_curada_separa_dolor_cambio():
+    from hd_scraper.curaduria import _evidencia_curada
+    e = _exp(keywords=["friccion_retencion", "crecimiento", "regulacion"])
+    ev = _evidencia_curada(e)
+    assert any("dolor" in h for h in ev["hechos_estructurales"])
+    assert any("cambio" in h for h in ev["hechos_estructurales"])
+
+
+def test_evidencia_curada_sin_deuda():
+    from hd_scraper.curaduria import _evidencia_curada
+    e = _exp(tipo_deuda="", deuda_razon="")
+    ev = _evidencia_curada(e)
+    assert ev["hipotesis_deuda"] == ""

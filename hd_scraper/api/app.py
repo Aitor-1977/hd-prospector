@@ -2803,16 +2803,22 @@ _ADMIN_HTML = """<!doctype html>
       h += '<h3>Organizaciones de Mayor Interés (' + orgs.length + ')</h3>';
       h += orgs.map(function(o, i) {
         const bcls = o.scoring === 'A' ? 'badge-a' : o.scoring === 'B' ? 'badge-b' : 'badge-c';
+        const viab = o.viabilidad_hd || {};
+        const vcls = viab.nivel === 'alta' ? 'badge-a' : viab.nivel === 'media' ? 'badge-b' : 'badge-c';
+        const evc = o.evidencia_curada || {};
         return '<div class="ranking-item">' +
           '<div class="ranking-pos">' + (i + 1) + '</div>' +
           '<div class="ranking-body">' +
             '<div><span class="org-name">' + esc(o.nombre) + '</span> ' +
               '<span class="badge ' + bcls + '">' + o.scoring + '</span> ' +
               '<span class="badge badge-interes">Interés ' + o.interes + '</span>' +
+              (viab.nivel ? ' <span class="badge ' + vcls + '">Viabilidad: ' + viab.nivel + '</span>' : '') +
               (o.hipotesis_deuda ? ' <span class="badge badge-deuda">Hipótesis: ' + esc(o.hipotesis_deuda) + '</span>' : '') +
               ' <a class="dossier-link" href="/dossier/' + encodeURIComponent(o.nombre) + '" target="_blank">Dossier ↗</a>' +
             '</div>' +
             '<div style="font-size:.85rem;margin-top:.2rem;line-height:1.5">' + esc(o.lectura) + '</div>' +
+            (evc.hipotesis_deuda ? '<div style="font-size:.78rem;margin-top:.2rem;color:#ff9800;font-style:italic">' + esc(evc.hipotesis_deuda) + '</div>' : '') +
+            (viab.razon ? '<div style="font-size:.78rem;margin-top:.15rem;opacity:.7">' + esc(viab.razon) + '</div>' : '') +
             (o.angulo ? '<div class="angulo" style="margin-top:.2rem;font-size:.78rem">💬 ' + esc(o.angulo) + '</div>' : '') +
           '</div></div>';
       }).join('');

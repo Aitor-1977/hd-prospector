@@ -6,6 +6,7 @@ from hd_scraper.relevance import (
     MOTIVO_OPINION,
     MOTIVO_SIN_EMPRESA,
     MOTIVO_SIN_EVENTO,
+    MOTIVO_SUPERFICIAL,
     calcular_calidad,
     detectar_empresa,
     es_opinion,
@@ -69,8 +70,14 @@ def test_relevancia_descarta_sin_empresa():
 
 def test_relevancia_descarta_sin_evento():
     ok, motivo = evaluar_relevancia(
-        "Nubank celebra su aniversario", [], empresa_identificada=True)
+        "Nubank anuncia cambios internos menores", [], empresa_identificada=True)
     assert not ok and motivo == MOTIVO_SIN_EVENTO
+
+
+def test_relevancia_descarta_evento_superficial():
+    ok, motivo = evaluar_relevancia(
+        "Nubank celebra su aniversario", ["lanzamiento"], empresa_identificada=True)
+    assert not ok and motivo == MOTIVO_SUPERFICIAL
 
 
 def test_relevancia_conserva_empresa_sin_evento_en_ecosistema():
@@ -149,6 +156,25 @@ def test_relevancia_descarta_ruido_mediatico():
     ):
         ok, m = evaluar_relevancia(titulo, kw, True)
         assert not ok and m == MOTIVO_RUIDO, titulo
+
+
+def test_relevancia_descarta_eventos_superficiales():
+    for titulo, kw in (
+        ("Rappi patrocina el festival de la ciudad", ["alianza"]),
+        ("Kavak celebra su aniversario con música", ["lanzamiento"]),
+        ("Bitso participa en la conferencia de blockchain", ["alianza"]),
+        ("Nubank obtiene certificación Great Place to Work", ["lanzamiento"]),
+        ("Mercado Libre sube en bolsa tras reporte trimestral", ["crecimiento"]),
+    ):
+        ok, m = evaluar_relevancia(titulo, kw, True)
+        assert not ok and m == MOTIVO_SUPERFICIAL, titulo
+
+
+def test_relevancia_conserva_dolor_aunque_superficial_ausente():
+    ok, m = evaluar_relevancia(
+        "Kavak despide al 30% de su plantilla en reestructuración",
+        ["reduccion_personal"], True)
+    assert ok and m == ""
 
 
 # ── calidad de captura (informativa) ─────────────────────────────────────────

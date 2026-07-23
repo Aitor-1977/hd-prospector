@@ -167,6 +167,60 @@ INTENSIDAD_ALTA = "Alta"
 INTENSIDAD_MEDIA = "Media"
 INTENSIDAD_BAJA = "Baja"
 
+# Profundidad de señal: cuánto dice la señal sobre fricción ESTRUCTURAL.
+# 0–100 donde 100 = máxima profundidad operativa. El Interés Analítico se
+# calcula a partir de esta profundidad, NO de lo "llamativo" del titular.
+PROFUNDIDAD_SENAL: dict[str, int] = {
+    "cierre_operaciones": 95,
+    "friccion_retencion": 90,
+    "reduccion_personal": 85,
+    "regulacion": 70,
+    "adquisicion": 65,
+    "cambio_liderazgo": 60,
+    "contratacion_masiva": 40,
+    "ronda_inversion": 35,
+    "expansion": 30,
+    "crecimiento": 25,
+    "alianza": 20,
+    "lanzamiento": 15,
+}
+
+# Amplificación por vertical: ciertas verticales hacen ciertas señales MÁS
+# relevantes para el trabajo de laboratorio de HD. Multiplicador sobre la
+# profundidad de la señal dominante.
+AMPLIFICADOR_VERTICAL: dict[str, dict[str, float]] = {
+    "fintech": {
+        "friccion_retencion": 1.3, "regulacion": 1.4,
+        "cierre_operaciones": 1.2, "ronda_inversion": 1.1,
+    },
+    "healthtech": {
+        "friccion_retencion": 1.3, "regulacion": 1.3,
+        "reduccion_personal": 1.2,
+    },
+    "salud mental": {
+        "friccion_retencion": 1.4, "reduccion_personal": 1.3,
+    },
+    "edtech": {
+        "friccion_retencion": 1.3, "reduccion_personal": 1.2,
+    },
+    "hrtech": {
+        "reduccion_personal": 1.4, "friccion_retencion": 1.3,
+        "contratacion_masiva": 1.3,
+    },
+    "saas_b2b": {
+        "friccion_retencion": 1.3, "reduccion_personal": 1.2,
+    },
+    "climatetech": {
+        "regulacion": 1.3, "ronda_inversion": 1.2,
+    },
+    "identidad": {
+        "regulacion": 1.4, "friccion_retencion": 1.3,
+    },
+    "logística agrícola": {
+        "expansion": 1.3, "cierre_operaciones": 1.2,
+    },
+}
+
 
 def _senales_ordenadas(keywords: list[str]) -> list[str]:
     """Señales presentes, en orden de prioridad (la primera es la dominante)."""
@@ -215,6 +269,34 @@ def _norm_vertical(vertical: str) -> str:
     return (vertical or "").strip().lower()
 
 
+def _calcular_profundidad(dominante: str | None, vert: str) -> int:
+    """Profundidad del dolor cruzada con el perfil de la vertical."""
+    base = PROFUNDIDAD_SENAL.get(dominante or "", 0)
+    amplificador = 1.0
+    if vert in AMPLIFICADOR_VERTICAL and dominante:
+        amplificador = AMPLIFICADOR_VERTICAL[vert].get(dominante, 1.0)
+    return min(int(base * amplificador), 100)
+
+
+def _calcular_viabilidad(
+    scoring: str, profundidad: int, hay_dolor: bool, vert_hd: bool,
+) -> str:
+    """Viabilidad del candidato para el laboratorio HD."""
+    if scoring == "A" and profundidad >= 70 and vert_hd:
+        return "alta"
+    if scoring == "A" and profundidad >= 50:
+        return "alta"
+    if scoring == "A":
+        return "media"
+    if scoring == "B" and profundidad >= 30 and vert_hd:
+        return "media"
+    if scoring == "B":
+        return "baja"
+    if profundidad > 0:
+        return "baja"
+    return "descartable"
+
+
 def analizar(
     keywords: list[str],
     vertical: str = "",
@@ -224,8 +306,12 @@ def analizar(
 ) -> dict:
     """Convierte señales capturadas en análisis profundo (determinista).
 
-    Devuelve dict con scoring, tipo_deuda, deuda_razon, score_icp, decisor y
-    razon. No hace red ni IA: es una hipótesis reproducible a partir de hechos.
+    El Interés Analítico (score_icp) se calcula cruzando la PROFUNDIDAD del
+    dolor detectado con el perfil de la vertical. No se basa en lo llamativo
+    del titular, sino en la profundidad de la fricción estructural.
+
+    Devuelve dict con scoring, tipo_deuda, deuda_razon, score_icp, decisor,
+    viabilidad, profundidad_dolor y razon.
     """
     ks = set(keywords or [])
     hay_dolor = bool(ks & SENALES_DOLOR)
@@ -240,27 +326,35 @@ def analizar(
     else:
         scoring = "C"
 
-    # Deuda Cultural™ (hipótesis): combinación de señales > señal única. Rol de
-    # decisor por la señal dominante.
     tipo_deuda, deuda_razon = _deuda_principal(keywords)
-    # Matiz por vertical sensible (fintech, salud mental…): enriquece la razón.
     vert = _norm_vertical(vertical)
     if tipo_deuda and vert in MATIZ_VERTICAL:
         deuda_razon = f"{deuda_razon}; {MATIZ_VERTICAL[vert]}"
     decisor = DECISOR_POR_SENAL.get(dominante or "", "CEO / Fundador/a")
     angulo = ANGULO_POR_DEUDA.get(tipo_deuda, "")
 
-    # Score ICP 0–100 (ajuste al perfil ideal de HD), por criterios objetivos.
-    icp = 25
+    # Profundidad del dolor: cruza señal con vertical.
+    profundidad = _calcular_profundidad(dominante, vert)
+
+    # Interés Analítico 0–100: basado en PROFUNDIDAD del dolor × vertical,
+    # no en lo llamativo del titular.
+    icp = 10
+    icp += int(profundidad * 0.4)
     if vert in VERTICALES_HD_SET:
-        icp += 25                       # vertical dependiente de contexto (HD)
-    if hay_dolor:
-        icp += 25                       # dolor explícito = necesidad
+        icp += 15
+    n_dolor = len(ks & SENALES_DOLOR)
+    if n_dolor >= 2:
+        icp += 20
+    elif n_dolor == 1:
+        icp += 15
     elif hay_cambio:
-        icp += 12                       # cambio = ventana de oportunidad
-    icp += int(round(max(0.0, min(confianza, 1.0)) * 15))  # calidad de captura
+        icp += 5
+    icp += int(round(max(0.0, min(confianza, 1.0)) * 10))
     icp += CALIDAD_PESO.get((calidad or "").strip(), 0)
     score_icp = max(0, min(icp, 100))
+
+    vert_hd = vert in VERTICALES_HD_SET
+    viabilidad = _calcular_viabilidad(scoring, profundidad, hay_dolor, vert_hd)
 
     # Razón auditable.
     partes = []
@@ -272,6 +366,7 @@ def analizar(
         partes.append("sin señal disparadora fuerte")
     if vert in VERTICALES_HD_SET:
         partes.append(f"vertical HD «{vert}»")
+    partes.append(f"profundidad {profundidad}")
     partes.append(f"confianza captura {confianza:.2f}")
     razon = "; ".join(partes) + "."
 
@@ -285,5 +380,7 @@ def analizar(
         "decisor_sugerido": decisor,
         "angulo_conversacion": angulo,
         "senal_dominante": dominante or "",
+        "profundidad_dolor": profundidad,
+        "viabilidad": viabilidad,
         "razon": razon,
     }

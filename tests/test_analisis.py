@@ -87,3 +87,47 @@ def test_deuda_secundaria_cuando_hay_dos_senales_distintas():
     r = analizar(["reduccion_personal", "regulacion"])
     assert r["tipo_deuda"] == "Deuda Moral"
     assert r["deuda_secundaria"] == "Deuda de Gobernanza"
+
+
+# ── profundidad_dolor y viabilidad ───────────────────────────────────────
+
+def test_profundidad_dolor_presente():
+    r = analizar(["friccion_retencion"], vertical="fintech", confianza=0.8)
+    assert r["profundidad_dolor"] > 0
+    assert r["profundidad_dolor"] >= 90
+
+
+def test_profundidad_dolor_cero_sin_senal():
+    r = analizar([], confianza=0.3)
+    assert r["profundidad_dolor"] == 0
+
+
+def test_profundidad_amplificada_por_vertical():
+    con_vert = analizar(["friccion_retencion"], vertical="fintech")
+    sin_vert = analizar(["friccion_retencion"], vertical="retail")
+    assert con_vert["profundidad_dolor"] > sin_vert["profundidad_dolor"]
+
+
+def test_viabilidad_alta_dolor_vertical_hd():
+    r = analizar(["friccion_retencion"], vertical="fintech", confianza=0.8)
+    assert r["viabilidad"] == "alta"
+
+
+def test_viabilidad_media_dolor_sin_vertical():
+    r = analizar(["friccion_retencion"], vertical="retail", confianza=0.5)
+    assert r["viabilidad"] in ("alta", "media")
+
+
+def test_viabilidad_baja_solo_cambio():
+    r = analizar(["ronda_inversion"], vertical="retail", confianza=0.5)
+    assert r["viabilidad"] == "baja"
+
+
+def test_viabilidad_descartable_sin_senal():
+    r = analizar([], confianza=0.3)
+    assert r["viabilidad"] == "descartable"
+
+
+def test_profundidad_en_razon():
+    r = analizar(["friccion_retencion"], vertical="fintech")
+    assert "profundidad" in r["razon"]
