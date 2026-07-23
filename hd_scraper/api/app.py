@@ -1762,6 +1762,8 @@ def _construir_expedientes(categorias: list[str] | None, limite: int = 30) -> di
             "scoring": a["scoring"],
             "score_icp": a["score_icp"],
             "intensidad": a["intensidad"],
+            "profundidad_dolor": a.get("profundidad_dolor", 0),
+            "viabilidad": a.get("viabilidad", ""),
             "tipo_deuda": a["tipo_deuda"],
             "deuda_razon": a["deuda_razon"],
             "deuda_secundaria": a.get("deuda_secundaria", ""),
